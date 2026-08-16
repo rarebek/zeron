@@ -14,11 +14,12 @@ use crate::theme::Theme;
 
 #[derive(Debug, Clone)]
 pub enum NotificationsEvent {
-    /// A toggle flipped — persist all three flags.
+    /// A toggle flipped — persist all four flags.
     Changed {
         sound: bool,
         desktop: bool,
         background_only: bool,
+        show_preview: bool,
     },
 }
 
@@ -26,16 +27,24 @@ pub struct NotificationsPage {
     sound: bool,
     desktop: bool,
     background_only: bool,
+    show_preview: bool,
 }
 
 impl EventEmitter<NotificationsEvent> for NotificationsPage {}
 
 impl NotificationsPage {
-    pub fn new(sound: bool, desktop: bool, background_only: bool, _cx: &mut Context<Self>) -> Self {
+    pub fn new(
+        sound: bool,
+        desktop: bool,
+        background_only: bool,
+        show_preview: bool,
+        _cx: &mut Context<Self>,
+    ) -> Self {
         Self {
             sound,
             desktop,
             background_only,
+            show_preview,
         }
     }
 
@@ -44,6 +53,7 @@ impl NotificationsPage {
             sound: self.sound,
             desktop: self.desktop,
             background_only: self.background_only,
+            show_preview: self.show_preview,
         });
     }
 }
@@ -54,6 +64,7 @@ impl Render for NotificationsPage {
         let sound = self.sound;
         let desktop = self.desktop;
         let background_only = self.background_only;
+        let show_preview = self.show_preview;
         let card = widgets::section_card(&theme)
             .child(
                 widgets::card_row(&theme, true)
@@ -152,6 +163,41 @@ impl Render for NotificationsPage {
                                 el.cursor_pointer().on_click(cx.listener(
                                     move |this, _, _, cx| {
                                         this.background_only = !this.background_only;
+                                        this.emit(cx);
+                                        cx.notify();
+                                    },
+                                ))
+                            }),
+                    ),
+            )
+            .child(
+                widgets::card_row(&theme, false)
+                    .when(!desktop, |el| el.opacity(0.55))
+                    .child(widgets::row_tile(&theme, icons::CHAT_ROUND_LINE))
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .flex()
+                            .flex_col()
+                            .child(widgets::row_title(&theme, "Show response preview"))
+                            .child(widgets::meta_line(
+                                &theme,
+                                vec![div()
+                                    .child(SharedString::from(
+                                        "Include a short preview of the agent’s final response. \
+                                         Turn this off for private work.",
+                                    ))
+                                    .into_any_element()],
+                            )),
+                    )
+                    .child(
+                        widgets::toggle_switch(&theme, show_preview)
+                            .id("notifications-preview-toggle")
+                            .when(desktop, |el| {
+                                el.cursor_pointer().on_click(cx.listener(
+                                    move |this, _, _, cx| {
+                                        this.show_preview = !this.show_preview;
                                         this.emit(cx);
                                         cx.notify();
                                     },

@@ -117,6 +117,8 @@ pub struct UiSettings {
     /// Suppress the banner while a Zeron window is focused (the chime covers
     /// the foreground case).
     pub notifications_background_only: bool,
+    /// Include the latest assistant response preview in completion banners.
+    pub notifications_show_preview: bool,
     pub right_pane_width: f32,
     /// Legacy: panel *open* flags are session-scoped in-memory state now
     /// (`shell::SessionPanels`, zeron `sessionPanels` parity). Kept for file
@@ -147,6 +149,7 @@ impl Default for UiSettings {
             sound_enabled: true,
             notifications_enabled: true,
             notifications_background_only: true,
+            notifications_show_preview: true,
             right_pane_width: RIGHT_PANE_DEFAULT,
             right_pane_open: false,
             terminal_height: TERMINAL_DEFAULT_HEIGHT,
@@ -417,6 +420,7 @@ mod tests {
             sound_enabled: false,
             notifications_enabled: false,
             notifications_background_only: false,
+            notifications_show_preview: false,
             right_pane_width: 700.0,
             right_pane_open: true,
             terminal_height: 320.0,
@@ -453,6 +457,10 @@ mod tests {
         assert!(
             loaded.notifications_background_only,
             "pre-banner files default background-only on"
+        );
+        assert!(
+            loaded.notifications_show_preview,
+            "older settings default response previews on"
         );
     }
 
