@@ -79,6 +79,9 @@ pub struct FileMeta {
 }
 
 const MANIFEST_SCHEMA_VERSION: u32 = 1;
+/// Zeron's public release origin. This is deliberately independent from the
+/// sync/auth edge so local and self-hosted runtimes still receive our builds.
+pub const DEFAULT_UPDATE_BASE_URL: &str = "https://github.com/rarebek/zeron/releases/download";
 
 /// Update channel selected for this installation. Invalid values fail closed.
 pub fn update_channel() -> anyhow::Result<String> {
@@ -90,14 +93,19 @@ pub fn update_channel() -> anyhow::Result<String> {
 }
 
 /// Release origin is independent from the sync edge. Forks must never silently
-/// consume another project's binaries. Production builds bake this value in;
-/// self-hosted/dev installs can explicitly override it.
-pub fn update_base_url(edge_fallback: &str) -> String {
-    std::env::var("ZERON_UPDATE_URL")
-        .ok()
+/// consume another project's binaries. Runtime or build-time overrides still
+/// support test channels and downstream forks.
+pub fn update_base_url(_edge_fallback: &str) -> String {
+    let runtime = std::env::var("ZERON_UPDATE_URL").ok();
+    resolve_update_base_url(runtime.as_deref(), option_env!("ZERON_UPDATE_URL"))
+}
+
+fn resolve_update_base_url(runtime: Option<&str>, built: Option<&str>) -> String {
+    runtime
         .filter(|value| !value.trim().is_empty())
-        .or_else(|| option_env!("ZERON_UPDATE_URL").map(str::to_owned))
-        .unwrap_or_else(|| edge_fallback.to_owned())
+        .or_else(|| built.filter(|value| !value.trim().is_empty()))
+        .unwrap_or(DEFAULT_UPDATE_BASE_URL)
+        .to_owned()
 }
 
 fn require_secure_url(url: &str, purpose: &str) -> anyhow::Result<()> {
@@ -958,6 +966,19 @@ mod tests {
         // Garbage never counts as newer.
         assert!(!version_newer("", "0.1.0"));
         assert!(!version_newer("nightly", "0.1.0"));
+    }
+
+    #[test]
+    fn update_origin_never_falls_back_to_the_sync_edge() {
+        assert_eq!(resolve_update_base_url(None, None), DEFAULT_UPDATE_BASE_URL);
+        assert_eq!(
+            resolve_update_base_url(Some("https://runtime.example/releases"), None),
+            "https://runtime.example/releases"
+        );
+        assert_eq!(
+            resolve_update_base_url(None, Some("https://built.example/releases")),
+            "https://built.example/releases"
+        );
     }
 
     #[test]

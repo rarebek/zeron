@@ -20,6 +20,10 @@ pub enum WorkspaceScope {
 pub struct EngineInfo {
     pub device_id: String,
     pub workspace_scope: WorkspaceScope,
+    /// Version of the engine process answering this RPC. Optional for wire
+    /// compatibility with pre-0.2.7 daemons.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub version: Option<String>,
 }
 
 #[cfg(test)]
@@ -46,13 +50,25 @@ mod tests {
         let info = EngineInfo {
             device_id: "device-1".into(),
             workspace_scope: WorkspaceScope::Local,
+            version: Some("0.2.7".into()),
         };
         assert_eq!(
             serde_json::to_value(&info).unwrap(),
             serde_json::json!({
                 "deviceId": "device-1",
                 "workspaceScope": "local",
+                "version": "0.2.7",
             })
         );
+    }
+
+    #[test]
+    fn engine_info_accepts_legacy_daemons_without_version() {
+        let info: EngineInfo = serde_json::from_value(serde_json::json!({
+            "deviceId": "legacy-device",
+            "workspaceScope": "synced"
+        }))
+        .unwrap();
+        assert_eq!(info.version, None);
     }
 }

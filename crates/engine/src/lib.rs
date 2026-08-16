@@ -638,6 +638,7 @@ impl Engine {
         Ok(EngineInfo {
             device_id: load_or_create_device_id(&config.data_dir)?,
             workspace_scope,
+            version: Some(env!("CARGO_PKG_VERSION").to_string()),
         })
     }
 
