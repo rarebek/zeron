@@ -22,6 +22,21 @@ pub fn post(title: &str, body: &str) {
     post_impl(title, body);
 }
 
+/// Turn a synced message preview into a compact, single-line notification
+/// body. The workspace row already caps the source at 120 characters; this
+/// normalizes whitespace and adds an ellipsis when that cap was reached.
+pub(crate) fn response_preview(text: &str) -> Option<String> {
+    let normalized = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    if normalized.is_empty() {
+        return None;
+    }
+    let mut preview: String = normalized.chars().take(119).collect();
+    if normalized.chars().count() > 119 {
+        preview.push('…');
+    }
+    Some(preview)
+}
+
 #[cfg(target_os = "macos")]
 fn post_impl(title: &str, body: &str) {
     macos::post(title, body);
@@ -46,18 +61,17 @@ mod macos {
     pub(super) fn initialize() {
         INITIALIZED.get_or_init(|| {
             let center = UNUserNotificationCenter::currentNotificationCenter();
-            let completion: RcBlock<dyn Fn(Bool, *mut NSError)> = RcBlock::new(
-                |granted: Bool, error: *mut NSError| {
-                AUTHORIZED.store(granted.as_bool() && error.is_null(), Ordering::Release);
-                if !error.is_null() {
-                    tracing::warn!("macOS notification authorization failed");
-                } else if granted.as_bool() {
-                    tracing::info!("macOS notifications authorized");
-                } else {
-                    tracing::info!("macOS notifications denied");
-                }
-                },
-            );
+            let completion: RcBlock<dyn Fn(Bool, *mut NSError)> =
+                RcBlock::new(|granted: Bool, error: *mut NSError| {
+                    AUTHORIZED.store(granted.as_bool() && error.is_null(), Ordering::Release);
+                    if !error.is_null() {
+                        tracing::warn!("macOS notification authorization failed");
+                    } else if granted.as_bool() {
+                        tracing::info!("macOS notifications authorized");
+                    } else {
+                        tracing::info!("macOS notifications denied");
+                    }
+                });
             center.requestAuthorizationWithOptions_completionHandler(
                 UNAuthorizationOptions::Alert
                     | UNAuthorizationOptions::Sound
@@ -115,3 +129,21 @@ fn post_impl(title: &str, body: &str) {
 
 #[cfg(not(any(target_os = "macos", target_os = "linux")))]
 fn post_impl(_title: &str, _body: &str) {}
+
+#[cfg(test)]
+mod tests {
+    use super::response_preview;
+
+    #[test]
+    fn response_preview_is_single_line_and_bounded() {
+        assert_eq!(
+            response_preview("  Finished\nchecking   both servers. ").as_deref(),
+            Some("Finished checking both servers.")
+        );
+        let long = "x".repeat(140);
+        let preview = response_preview(&long).unwrap();
+        assert_eq!(preview.chars().count(), 120);
+        assert!(preview.ends_with('…'));
+        assert_eq!(response_preview(" \n\t"), None);
+    }
+}

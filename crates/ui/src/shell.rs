@@ -1203,7 +1203,13 @@ impl Shell {
         // still ring.
         {
             let now = Utc::now();
-            type Ping = (String, zeron_proto::SessionStatus, bool, Option<String>);
+            type Ping = (
+                String,
+                zeron_proto::SessionStatus,
+                bool,
+                Option<String>,
+                Option<String>,
+            );
             let sessions: Vec<Ping> = {
                 let state = state.read(cx);
                 state
@@ -1218,12 +1224,10 @@ impl Shell {
                             Indicator::None => zeron_proto::SessionStatus::Idle,
                         };
                         let send_pending = state.send_pending(&s.chat_id, now);
-                        let title = state
-                            .chats
-                            .iter()
-                            .find(|c| c.id == s.chat_id)
-                            .and_then(|c| c.title.clone());
-                        (s.chat_id.clone(), status, send_pending, title)
+                        let chat = state.chats.iter().find(|c| c.id == s.chat_id);
+                        let title = chat.and_then(|c| c.title.clone());
+                        let response = chat.and_then(|c| c.last_message_preview.clone());
+                        (s.chat_id.clone(), status, send_pending, title, response)
                     })
                     .collect()
             };
@@ -1232,7 +1236,7 @@ impl Shell {
             // focused app still stays a chime — you're already looking at
             // Zeron; the sidebar dot carries the rest.
             let app_focused = cx.active_window().is_some();
-            for (chat_id, status, send_pending, title) in sessions {
+            for (chat_id, status, send_pending, title, response) in sessions {
                 let prev = self.sound_prev.insert(chat_id, status);
                 if let Some(prev) = prev
                     && let Some(sound) = crate::sound::sound_for_transition(prev, status)
@@ -1246,10 +1250,16 @@ impl Shell {
                     {
                         let title = title.unwrap_or_else(|| "New session".into());
                         let body = match sound {
-                            crate::sound::Sound::Done => "Run finished",
-                            crate::sound::Sound::Request => "Waiting on your input",
+                            crate::sound::Sound::Done
+                                if self.settings.notifications_show_preview =>
+                            {
+                                crate::notify::response_preview(response.as_deref().unwrap_or(""))
+                                    .unwrap_or_else(|| "Run finished".into())
+                            }
+                            crate::sound::Sound::Done => "Run finished".into(),
+                            crate::sound::Sound::Request => "Waiting on your input".into(),
                         };
-                        crate::notify::post(&title, body);
+                        crate::notify::post(&title, &body);
                     }
                 }
             }
@@ -1936,6 +1946,7 @@ impl Shell {
                             self.settings.sound_enabled,
                             self.settings.notifications_enabled,
                             self.settings.notifications_background_only,
+                            self.settings.notifications_show_preview,
                             cx,
                         )
                     });
@@ -1947,6 +1958,7 @@ impl Shell {
                                 sound,
                                 desktop,
                                 background_only,
+                                show_preview,
                             } = *event;
                             this.settings.sound_enabled = sound;
                             this.settings.notifications_enabled = desktop;
@@ -1954,6 +1966,7 @@ impl Shell {
                                 crate::notify::initialize();
                             }
                             this.settings.notifications_background_only = background_only;
+                            this.settings.notifications_show_preview = show_preview;
                             this.schedule_save(cx);
                             cx.notify();
                         },
@@ -3421,7 +3434,7 @@ impl Shell {
             }
             Some(WorkspaceScope::Development) => (
                 "Development".into(),
-                Some("Local development runtime".into()),
+                Some("Private workspace".into()),
                 "Authentication disabled".into(),
             ),
             Some(WorkspaceScope::Synced) | None => {

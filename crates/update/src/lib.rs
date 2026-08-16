@@ -38,8 +38,9 @@ pub const fn current_version() -> &'static str {
 pub const CHECK_INTERVAL: std::time::Duration = std::time::Duration::from_secs(6 * 60 * 60);
 /// Retry sooner after a failed check (offline boot, transient edge error).
 pub const CHECK_RETRY: std::time::Duration = std::time::Duration::from_secs(30 * 60);
-/// First check waits out engine boot (room joins, doc re-sync).
-pub const CHECK_INITIAL_DELAY: std::time::Duration = std::time::Duration::from_secs(20);
+/// Check as soon as the process starts. Network work remains asynchronous, so
+/// this does not delay the first window or engine boot.
+pub const CHECK_INITIAL_DELAY: std::time::Duration = std::time::Duration::ZERO;
 /// While an auto-apply is deferred behind active sessions, re-probe idleness
 /// this often.
 const IDLE_RECHECK: std::time::Duration = std::time::Duration::from_secs(5 * 60);
