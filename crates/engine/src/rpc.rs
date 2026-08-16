@@ -403,6 +403,7 @@ impl EngineRpc {
         let engine_info = EngineInfo {
             device_id: doc_host.device_id().to_string(),
             workspace_scope,
+            version: Some(env!("CARGO_PKG_VERSION").to_string()),
         };
         Self {
             sessions,

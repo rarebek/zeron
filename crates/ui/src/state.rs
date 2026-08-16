@@ -508,6 +508,7 @@ async fn query_engine_info(client: &RpcClient) -> Result<EngineInfo, RpcError> {
             Ok(EngineInfo {
                 device_id: legacy.device_id,
                 workspace_scope: WorkspaceScope::Synced,
+                version: None,
             })
         }
         Err(err) => Err(err),
@@ -1726,6 +1727,7 @@ mod tests {
                 engine_info: EngineInfo {
                     device_id: "owner-device".into(),
                     workspace_scope: WorkspaceScope::Local,
+                    version: Some("test".into()),
                 },
                 state: state_rx,
             }),

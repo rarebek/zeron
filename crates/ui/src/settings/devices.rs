@@ -1,6 +1,6 @@
 //! Settings → Devices (feature-inventory §1.5): the device registry — name,
-//! platform, last-seen, presence dot, a "This device" badge, click-to-copy id,
-//! and a Rename dialog (Mutate renameDevice).
+//! platform, runtime version, last-seen, presence dot, a connected-runtime
+//! badge, click-to-copy id, and a Rename dialog (Mutate renameDevice).
 
 use chrono::{DateTime, Utc};
 use gpui::{
@@ -25,6 +25,16 @@ pub const DEVICE_ONLINE_WINDOW_SECS: i64 = 70;
 pub fn device_online(last_seen: Option<DateTime<Utc>>, now: DateTime<Utc>) -> bool {
     last_seen
         .is_some_and(|at| now.signed_duration_since(at).num_seconds() <= DEVICE_ONLINE_WINDOW_SECS)
+}
+
+/// The runtime currently answering RPC is authoritative proof of liveness;
+/// registry presence is the fallback for every other device.
+pub fn device_row_online(
+    connected_runtime: bool,
+    last_seen: Option<DateTime<Utc>>,
+    now: DateTime<Utc>,
+) -> bool {
+    connected_runtime || device_online(last_seen, now)
 }
 
 /// Compact last-seen line. Pure.
@@ -215,11 +225,13 @@ impl Render for DevicesPage {
         use crate::settings::widgets;
         let theme = Theme::of(cx).clone();
         let now = Utc::now();
-        let (devices, local_id, workspace_scope) = {
+        let (devices, runtime_id, runtime_version, workspace_scope) = {
             let state = self.state.read(cx);
+            let engine_info = state.engine().map(|engine| engine.engine_info());
             (
                 state.devices.clone(),
-                state.local_device_id.clone(),
+                engine_info.map(|info| info.device_id.clone()),
+                engine_info.and_then(|info| info.version.clone()),
                 state.workspace_scope,
             )
         };
@@ -232,8 +244,10 @@ impl Render for DevicesPage {
             .into_iter()
             .enumerate()
             .map(|(ix, device)| {
-                let online = device_online(device.last_seen_at, now);
-                let is_local = local_id.as_deref() == Some(device.id.as_str());
+                let is_runtime = runtime_id.as_deref() == Some(device.id.as_str());
+                // The runtime answering this UI's RPC is provably online even
+                // when the optional registry/presence server is unavailable.
+                let online = device_row_online(is_runtime, device.last_seen_at, now);
                 let id_copied = copied.as_deref() == Some(device.id.as_str());
                 let copy_id = device.id.clone();
                 let rename_id = device.id.clone();
@@ -278,14 +292,21 @@ impl Render for DevicesPage {
                         ))
                         .into_any_element(),
                 ];
-                if let Some(version) = device.version.as_deref().filter(|v| !v.is_empty()) {
+                let version = if is_runtime {
+                    runtime_version.as_deref().or(device.version.as_deref())
+                } else {
+                    device.version.as_deref()
+                };
+                if let Some(version) = version.filter(|v| !v.is_empty()) {
                     meta.push(
                         div()
-                            .child(SharedString::from(format!("v{version}")))
+                            .child(SharedString::from(format!("Runtime v{version}")))
                             .into_any_element(),
                     );
                 }
-                if !online {
+                if online {
+                    meta.push(div().child("Online now").into_any_element());
+                } else {
                     meta.push(
                         div()
                             .child(SharedString::from(format!(
@@ -340,17 +361,13 @@ impl Render for DevicesPage {
                             .child(widgets::row_title(&theme, device.name.clone()))
                             .child(widgets::meta_line(&theme, meta)),
                     )
-                    .when(is_local, |el| {
+                    .when(is_runtime, |el| {
                         el.child(
                             div()
                                 .flex_none()
                                 .text_size(px(10.5))
                                 .text_color(theme.text_muted)
-                                .child(if workspace_scope == Some(WorkspaceScope::Local) {
-                                    "Local only"
-                                } else {
-                                    "This device"
-                                }),
+                                .child("Connected runtime"),
                         )
                     })
                     .child(
@@ -440,6 +457,13 @@ mod tests {
         assert!(!device_online(None, now));
         // Clock skew (future) counts as online.
         assert!(device_online(Some(now + TimeDelta::seconds(30)), now));
+    }
+
+    #[test]
+    fn connected_runtime_is_online_without_registry_presence() {
+        let now = Utc::now();
+        assert!(device_row_online(true, None, now));
+        assert!(!device_row_online(false, None, now));
     }
 
     #[test]
