@@ -189,7 +189,7 @@ jobs:
             --arg version "$VERSION" \
             --arg publishedAt "$published_at" \
             --arg artifactBaseUrl "$artifact_base_url" \
-            '{schemaVersion:$schemaVersion,channel:$channel,version:$version,publishedAt:$publishedAt,artifactBaseUrl:$artifactBaseUrl,files:{}}')
+            '{schema_version:$schemaVersion,channel:$channel,version:$version,published_at:$publishedAt,artifact_base_url:$artifactBaseUrl,files:{}}')
           for f in dist/*; do
             name=$(basename "$f")
             sha=$(sha256sum "$f" | cut -d' ' -f1)

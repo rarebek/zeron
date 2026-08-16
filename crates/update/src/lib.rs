@@ -52,17 +52,17 @@ const IDLE_RECHECK: std::time::Duration = std::time::Duration::from_secs(5 * 60)
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct Manifest {
     /// Manifest format. Unknown versions fail closed.
-    #[serde(default)]
+    #[serde(default, alias = "schemaVersion")]
     pub schema_version: u32,
     /// Release channel this manifest belongs to (`stable` or `beta`).
     #[serde(default)]
     pub channel: String,
     pub version: String,
     /// RFC 3339 publication timestamp, included in signed release metadata.
-    #[serde(default)]
+    #[serde(default, alias = "publishedAt")]
     pub published_at: String,
     /// Signed immutable directory containing this release's artifacts.
-    #[serde(default)]
+    #[serde(default, alias = "artifactBaseUrl")]
     pub artifact_base_url: String,
     /// Artifact file name → mandatory integrity metadata.
     #[serde(default)]
@@ -1017,12 +1017,23 @@ mod tests {
     #[test]
     fn manifest_metadata_parses() {
         let full: Manifest = serde_json::from_str(
-            r#"{"schemaVersion":1,"channel":"stable","version":"0.1.1","publishedAt":"2026-01-01T00:00:00Z","artifactBaseUrl":"https://example.com/v0.1.1","files":{"zeron-0.1.1-linux-x86_64.tar.gz":{"sha256":"abc","size":42}}}"#,
+            r#"{"schema_version":1,"channel":"stable","version":"0.1.1","published_at":"2026-01-01T00:00:00Z","artifact_base_url":"https://example.com/v0.1.1","files":{"zeron-0.1.1-linux-x86_64.tar.gz":{"sha256":"abc","size":42}}}"#,
         )
         .unwrap();
+        assert_eq!(full.schema_version, 1);
         assert_eq!(full.version, "0.1.1");
+        assert_eq!(full.published_at, "2026-01-01T00:00:00Z");
+        assert_eq!(full.artifact_base_url, "https://example.com/v0.1.1");
         assert_eq!(full.files["zeron-0.1.1-linux-x86_64.tar.gz"].sha256, "abc");
         assert_eq!(full.files["zeron-0.1.1-linux-x86_64.tar.gz"].size, 42);
+
+        let camel_case: Manifest = serde_json::from_str(
+            r#"{"schemaVersion":1,"channel":"stable","version":"0.1.1","publishedAt":"2026-01-01T00:00:00Z","artifactBaseUrl":"https://example.com/v0.1.1","files":{}}"#,
+        )
+        .unwrap();
+        assert_eq!(camel_case.schema_version, 1);
+        assert_eq!(camel_case.published_at, "2026-01-01T00:00:00Z");
+        assert_eq!(camel_case.artifact_base_url, "https://example.com/v0.1.1");
     }
 
     #[test]

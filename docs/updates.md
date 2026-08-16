@@ -12,6 +12,10 @@ The stable and beta pointers live at:
 
 Each signed manifest points to immutable artifacts under the matching `v<version>` GitHub release. Sync configuration and update configuration are deliberately separate.
 
+Schema version 1 uses snake_case JSON field names (`schema_version`,
+`published_at`, and `artifact_base_url`). Clients also accept the original
+camelCase spellings for compatibility.
+
 ## One-time signing setup
 
 Generate the Ed25519 key on a trusted offline machine:
