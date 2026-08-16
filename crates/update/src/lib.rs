@@ -35,11 +35,11 @@ pub const fn current_version() -> &'static str {
 }
 
 /// Background check cadence.
-const CHECK_INTERVAL: std::time::Duration = std::time::Duration::from_secs(6 * 60 * 60);
+pub const CHECK_INTERVAL: std::time::Duration = std::time::Duration::from_secs(6 * 60 * 60);
 /// Retry sooner after a failed check (offline boot, transient edge error).
-const CHECK_RETRY: std::time::Duration = std::time::Duration::from_secs(30 * 60);
+pub const CHECK_RETRY: std::time::Duration = std::time::Duration::from_secs(30 * 60);
 /// First check waits out engine boot (room joins, doc re-sync).
-const CHECK_INITIAL_DELAY: std::time::Duration = std::time::Duration::from_secs(20);
+pub const CHECK_INITIAL_DELAY: std::time::Duration = std::time::Duration::from_secs(20);
 /// While an auto-apply is deferred behind active sessions, re-probe idleness
 /// this often.
 const IDLE_RECHECK: std::time::Duration = std::time::Duration::from_secs(5 * 60);

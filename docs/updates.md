@@ -63,6 +63,7 @@ Versions containing a SemVer prerelease suffix publish to `beta`; ordinary versi
 - Manifest signatures, schema, channel, artifact name, byte length, and SHA-256 must all match.
 - macOS always requires `codesign --verify --deep --strict`. Certificate-signed builds additionally require Gatekeeper acceptance; ad-hoc community builds derive publisher trust from the verified Ed25519 manifest.
 - macOS downloads automatically, asks for restart, retains the previous bundle, and restores it if the new process fails its launch health window.
+- The desktop app checks its local executable independently of the connected engine, so a Mac controlling a remote Linux machine still receives Mac updates.
 - Managed Linux installs stage into a versioned directory, atomically switch `current`, retain `previous`, wait for active sessions and terminals to finish, and roll back if service restart fails.
 - Source checkouts are report-only and update through Git.
 

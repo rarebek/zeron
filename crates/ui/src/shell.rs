@@ -494,6 +494,18 @@ enum UpdateFlow {
     Failed(SharedString),
 }
 
+fn desktop_update_status(
+    install: &zeron_update::InstallKind,
+    local: Option<zeron_update::UpdateStatus>,
+    engine: Option<zeron_update::UpdateStatus>,
+) -> Option<zeron_update::UpdateStatus> {
+    if matches!(install, zeron_update::InstallKind::MacApp { .. }) {
+        local
+    } else {
+        engine
+    }
+}
+
 /// Account lifecycle owned by this process. Sign-in on a local workspace
 /// flows through the in-place switch wizard (offer → switch → import → done);
 /// `RestartPending` survives only as the fallback when the in-place swap
@@ -831,11 +843,13 @@ pub struct Shell {
     user_menu: popover::Popup<()>,
     /// Inline sidebar error strip (mutation failures); click dismisses.
     sidebar_notice: Option<SharedString>,
-    /// Local lifecycle of an in-app update (macOS bundle swap) — the engine's
-    /// UpdateStatus stream says WHETHER one exists; this says how far the
-    /// download/stage of it has come in this process.
+    /// Local lifecycle of an in-app update (macOS bundle swap).
     update_flow: UpdateFlow,
     update_task: Option<Task<()>>,
+    /// Desktop releases belong to this executable, not the engine currently
+    /// connected to the window (which may be a remote PC over a tunnel).
+    desktop_update_status: Option<zeron_update::UpdateStatus>,
+    desktop_update_check_task: Option<Task<()>>,
     /// Version whose update strip the user dismissed (advisory installs only —
     /// a newer release shows the strip again).
     update_dismissed: Option<String>,
@@ -1009,7 +1023,7 @@ impl Shell {
             Route::Chat => NavEntry::Chat(String::new()),
             Route::Settings(section) => NavEntry::Settings(section),
         });
-        Self {
+        let mut shell = Self {
             state,
             transcript,
             composer,
@@ -1057,6 +1071,8 @@ impl Shell {
             sidebar_notice: None,
             update_flow: UpdateFlow::Idle,
             update_task: None,
+            desktop_update_status: None,
+            desktop_update_check_task: None,
             update_dismissed: None,
             install: zeron_update::detect_install(),
             org: None,
@@ -1098,7 +1114,9 @@ impl Shell {
             _ticker: ticker,
             _state_observation: observation,
             _composer_events: composer_events,
-        }
+        };
+        shell.start_desktop_update_checker(cx);
+        shell
     }
 
     // ---- splash ----
@@ -1117,20 +1135,7 @@ impl Shell {
                 self.org = None;
             }
         }
-        // Authenticate and stage desktop updates in the background. Applying
-        // remains an explicit restart action, so active work is never cut off.
-        let should_stage_update = zeron_update::desktop_auto_update_enabled()
-            && self.settings.automatic_updates
-            && matches!(self.install, zeron_update::InstallKind::MacApp { .. })
-            && matches!(self.update_flow, UpdateFlow::Idle)
-            && state
-                .read(cx)
-                .update
-                .as_ref()
-                .is_some_and(|status| status.update_available);
-        if should_stage_update {
-            self.begin_update_download(cx);
-        }
+        self.maybe_stage_desktop_update(cx);
         // The in-place local→synced switch: once the replacement runtime is
         // attached and Ready, kick the import (or finish) from here.
         self.drive_sync_switch(cx);
@@ -3513,7 +3518,7 @@ impl Shell {
     /// the staged bundle. Elsewhere (managed/source installs) it is advisory
     /// (`zeron update`); click dismisses it for that version.
     fn render_update_strip(&mut self, theme: &Theme, cx: &mut Context<Self>) -> Option<AnyElement> {
-        let status = self.state.read(cx).update.clone()?;
+        let status = self.current_update_status(cx)?;
         if !status.update_available {
             return None;
         }
@@ -3587,9 +3592,7 @@ impl Shell {
     fn on_update_strip_click(&mut self, cx: &mut Context<Self>) {
         if !matches!(self.install, zeron_update::InstallKind::MacApp { .. }) {
             self.update_dismissed = self
-                .state
-                .read(cx)
-                .update
+                .current_update_status(cx)
                 .as_ref()
                 .and_then(|s| s.latest_version.clone());
             cx.notify();
@@ -3600,6 +3603,91 @@ impl Shell {
             UpdateFlow::Downloading => self.update_flow = UpdateFlow::Downloading,
             UpdateFlow::Ready(staged) => self.apply_staged_update(staged, cx),
         }
+    }
+
+    fn current_update_status(&self, cx: &Context<Self>) -> Option<zeron_update::UpdateStatus> {
+        desktop_update_status(
+            &self.install,
+            self.desktop_update_status.clone(),
+            self.state.read(cx).update.clone(),
+        )
+    }
+
+    fn maybe_stage_desktop_update(&mut self, cx: &mut Context<Self>) {
+        let should_stage = zeron_update::desktop_auto_update_enabled()
+            && self.settings.automatic_updates
+            && matches!(self.install, zeron_update::InstallKind::MacApp { .. })
+            && matches!(self.update_flow, UpdateFlow::Idle)
+            && self
+                .desktop_update_status
+                .as_ref()
+                .is_some_and(|status| status.update_available);
+        if should_stage {
+            self.begin_update_download(cx);
+        }
+    }
+
+    /// A desktop app checks its own release channel independently of the
+    /// connected engine. In particular, a Mac controlling a Linux PC must not
+    /// inherit the PC daemon's version or updater configuration.
+    fn start_desktop_update_checker(&mut self, cx: &mut Context<Self>) {
+        if !matches!(self.install, zeron_update::InstallKind::MacApp { .. }) {
+            return;
+        }
+        let edge_url = self.boot.edge_url.clone();
+        self.desktop_update_check_task = Some(cx.spawn(async move |this, cx| {
+            cx.background_executor()
+                .timer(zeron_update::CHECK_INITIAL_DELAY)
+                .await;
+            loop {
+                let check_url = edge_url.clone();
+                let check =
+                    Tokio::spawn(
+                        cx,
+                        async move { zeron_update::fetch_latest(&check_url).await },
+                    );
+                let result = match check.await {
+                    Ok(result) => result,
+                    Err(error) => Err(anyhow::anyhow!(error.to_string())),
+                };
+                let succeeded = result.is_ok();
+                if this
+                    .update(cx, |shell, cx| {
+                        shell.desktop_update_status = Some(match result {
+                            Ok(manifest) => zeron_update::UpdateStatus {
+                                current_version: zeron_update::current_version().to_owned(),
+                                update_available: zeron_update::version_newer(
+                                    &manifest.version,
+                                    zeron_update::current_version(),
+                                ),
+                                latest_version: Some(manifest.version),
+                                checked_at: None,
+                                error: None,
+                            },
+                            Err(error) => zeron_update::UpdateStatus {
+                                current_version: zeron_update::current_version().to_owned(),
+                                latest_version: None,
+                                update_available: false,
+                                checked_at: None,
+                                error: Some(format!("{error:#}")),
+                            },
+                        });
+                        shell.maybe_stage_desktop_update(cx);
+                        cx.notify();
+                    })
+                    .is_err()
+                {
+                    break;
+                }
+                cx.background_executor()
+                    .timer(if succeeded {
+                        zeron_update::CHECK_INTERVAL
+                    } else {
+                        zeron_update::CHECK_RETRY
+                    })
+                    .await;
+            }
+        }));
     }
 
     /// Fetch the manifest and stage the new Zeron desktop bundle under the data dir
@@ -6489,6 +6577,42 @@ impl Render for Shell {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn update_status(version: &str) -> zeron_update::UpdateStatus {
+        zeron_update::UpdateStatus {
+            current_version: "0.2.4".into(),
+            latest_version: Some(version.into()),
+            update_available: true,
+            checked_at: None,
+            error: None,
+        }
+    }
+
+    #[test]
+    fn mac_app_uses_local_update_status_when_engine_is_remote() {
+        let local = update_status("0.2.5");
+        let remote = update_status("9.9.9");
+        let selected = desktop_update_status(
+            &zeron_update::InstallKind::MacApp {
+                bundle: PathBuf::from("/Applications/Zeron.app"),
+            },
+            Some(local),
+            Some(remote),
+        )
+        .unwrap();
+        assert_eq!(selected.latest_version.as_deref(), Some("0.2.5"));
+    }
+
+    #[test]
+    fn non_desktop_install_uses_engine_update_status() {
+        let selected = desktop_update_status(
+            &zeron_update::InstallKind::Unmanaged,
+            Some(update_status("0.2.5")),
+            Some(update_status("9.9.9")),
+        )
+        .unwrap();
+        assert_eq!(selected.latest_version.as_deref(), Some("9.9.9"));
+    }
 
     #[tokio::test]
     async fn remote_shutdown_waits_for_ipc_release() {
