@@ -26,6 +26,14 @@
     <string>__VERSION__</string>
     <key>LSMinimumSystemVersion</key>
     <string>12.0</string>
+    <!-- The packaged Mac client controls the PC engine through its managed
+         localhost SSH tunnel. Keep retrying instead of embedding locally if
+         the PC or Tailscale is temporarily unavailable. -->
+    <key>LSEnvironment</key>
+    <dict>
+        <key>ZERON_REQUIRE_REMOTE</key>
+        <string>1</string>
+    </dict>
     <key>NSHighResolutionCapable</key>
     <true/>
     <key>NSHumanReadableCopyright</key>

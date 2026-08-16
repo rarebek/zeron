@@ -188,15 +188,17 @@ pub fn run_app(config: UiConfig) {
     });
 }
 
-/// Open the 1320×880 main window (min 900×600) with [`shell::Shell`] as the
+/// Open the main window with a maximized initial state (min 900×600) with [`shell::Shell`] as the
 /// root view. Called at boot and again from `on_reopen` if the dock icon is
 /// clicked after ⌘W closed the window.
 fn open_main_window(state: gpui::Entity<state::AppState>, boot: EngineBootConfig, cx: &mut App) {
-    // zeron window geometry: 1320×880, min 900×600 (feature-inventory §1.1).
-    let bounds = Bounds::centered(None, size(px(1320.), px(880.)), cx);
+    // The old fixed 1320×880 rectangle could open partly off-screen on the
+    // MacBook Air after display scaling changed. Maximized uses the current
+    // display's usable bounds and still keeps a restore rectangle for macOS.
+    let restore_bounds = Bounds::centered(None, size(px(1200.), px(760.)), cx);
     cx.open_window(
         WindowOptions {
-            window_bounds: Some(WindowBounds::Windowed(bounds)),
+            window_bounds: Some(WindowBounds::Maximized(restore_bounds)),
             window_min_size: Some(size(px(900.), px(600.))),
             // `kind` is deliberately left at its default `WindowKind::Normal`
             // (gpui platform.rs WindowOptions::default), which on macOS maps

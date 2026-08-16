@@ -226,6 +226,30 @@ impl EngineHandle {
         static BOOTSTRAP_GATE: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
         let _gate = BOOTSTRAP_GATE.lock().await;
 
+        // The packaged Mac client is a remote control surface for the PC
+        // engine. Do not silently start a second local engine when the SSH
+        // tunnel is still coming up or Tailscale is reconnecting.
+        let require_daemon = std::env::var_os("ZERON_REQUIRE_REMOTE").is_some_and(|value| {
+            let value = value.to_string_lossy();
+            !matches!(value.as_ref(), "" | "0" | "false" | "no")
+        });
+
+        if require_daemon {
+            let mut delay = std::time::Duration::from_millis(250);
+            loop {
+                if let Some(handle) = Self::attach_to_daemon(config.ipc_port).await {
+                    return Ok(handle);
+                }
+                tracing::info!(
+                    port = config.ipc_port,
+                    retry_in_ms = delay.as_millis(),
+                    "remote engine unavailable; retrying"
+                );
+                tokio::time::sleep(delay).await;
+                delay = (delay * 2).min(std::time::Duration::from_secs(5));
+            }
+        }
+
         if let Some(handle) = Self::attach_to_daemon(config.ipc_port).await {
             return Ok(handle);
         }
