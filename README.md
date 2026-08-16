@@ -53,4 +53,6 @@ On macOS: use the desktop release, or build `zeron` from source and run `zeron d
 
 Developing or curious how it works? Check out [ARCHITECTURE.md](ARCHITECTURE.md).
 
+Release maintainers should follow the signed [production update guide](docs/updates.md).
+
 Licensed under the [MIT License](LICENSE).

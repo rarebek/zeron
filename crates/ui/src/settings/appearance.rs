@@ -21,17 +21,22 @@ use crate::theme::{Appearance, Theme};
 #[derive(Debug, Clone, Copy)]
 pub enum AppearanceEvent {
     WindowModeChanged(WindowMode),
+    AutomaticUpdatesChanged(bool),
 }
 
 pub struct AppearancePage {
     window_mode: WindowMode,
+    automatic_updates: bool,
 }
 
 impl EventEmitter<AppearanceEvent> for AppearancePage {}
 
 impl AppearancePage {
-    pub fn new(window_mode: WindowMode, _cx: &mut Context<Self>) -> Self {
-        Self { window_mode }
+    pub fn new(window_mode: WindowMode, automatic_updates: bool, _cx: &mut Context<Self>) -> Self {
+        Self {
+            window_mode,
+            automatic_updates,
+        }
     }
 }
 
@@ -177,6 +182,7 @@ impl Render for AppearancePage {
         let theme = Theme::of(cx).clone();
         let current = appearance::mode(cx);
         let window_mode = self.window_mode;
+        let automatic_updates = self.automatic_updates;
         let system = cx
             .try_global::<appearance::AppearanceState>()
             .map(|state| state.system)
@@ -265,6 +271,54 @@ impl Render for AppearancePage {
                                             "Opens maximized on the current display."
                                         }
                                     })),
+                            ),
+                    )
+                    .child(
+                        div()
+                            .mt(px(32.0))
+                            .flex()
+                            .flex_col()
+                            .gap(px(12.0))
+                            .child(widgets::field_label(&theme, "Updates"))
+                            .child(
+                                widgets::section_card(&theme).child(
+                                    widgets::card_row(&theme, false)
+                                        .child(
+                                            div()
+                                                .flex_1()
+                                                .min_w_0()
+                                                .flex()
+                                                .flex_col()
+                                                .child(widgets::row_title(
+                                                    &theme,
+                                                    "Automatic updates",
+                                                ))
+                                                .child(
+                                                    div()
+                                                        .mt(px(3.0))
+                                                        .text_size(px(12.0))
+                                                        .text_color(theme.text_muted)
+                                                        .child(
+                                                            "Securely download updates in the background and ask before restarting.",
+                                                        ),
+                                                ),
+                                        )
+                                        .child(
+                                            widgets::toggle_switch(&theme, automatic_updates)
+                                                .id("automatic-updates-toggle")
+                                                .cursor_pointer()
+                                                .on_click(cx.listener(|this, _, _, cx| {
+                                                    this.automatic_updates =
+                                                        !this.automatic_updates;
+                                                    cx.emit(
+                                                        AppearanceEvent::AutomaticUpdatesChanged(
+                                                            this.automatic_updates,
+                                                        ),
+                                                    );
+                                                    cx.notify();
+                                                })),
+                                        ),
+                                ),
                             ),
                     ),
             )

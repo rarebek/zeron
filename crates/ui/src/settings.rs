@@ -78,6 +78,8 @@ impl Default for WindowMode {
 pub struct UiSettings {
     /// Main window launch behavior.
     pub window_mode: WindowMode,
+    /// Authenticate and download desktop updates in the background.
+    pub automatic_updates: bool,
     pub sidebar_width: f32,
     pub sidebar_collapsed: bool,
     /// Legacy: the grouped-by-project toggle predates spaces (which group by
@@ -132,6 +134,7 @@ impl Default for UiSettings {
     fn default() -> Self {
         Self {
             window_mode: WindowMode::default(),
+            automatic_updates: true,
             sidebar_width: SIDEBAR_DEFAULT,
             sidebar_collapsed: false,
             sidebar_grouped: false,
@@ -397,6 +400,8 @@ mod tests {
     fn round_trip() {
         let dir = tempfile::tempdir().unwrap();
         let settings = UiSettings {
+            window_mode: WindowMode::Maximized,
+            automatic_updates: false,
             sidebar_width: 300.0,
             sidebar_collapsed: true,
             sidebar_grouped: true,

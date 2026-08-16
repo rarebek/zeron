@@ -97,6 +97,9 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 clap = { version = "4", features = ["derive"] }
 chrono = { version = "0.4", features = ["serde"] }
 sha2 = "0.10"
+base64 = "0.22"
+ed25519-dalek = "2"
+semver = "1"
 notify = "7"
 block2 = "0.6.2"
 objc2-user-notifications = "0.3.2"

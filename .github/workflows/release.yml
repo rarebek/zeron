@@ -3,9 +3,8 @@ name: release
 # Build release artifacts and publish them:
 #   - Linux headless tarballs (x86_64 + aarch64) via scripts/package-linux.sh
 #   - macOS dmg (Apple silicon) via scripts/package-macos.sh
-# then create a GitHub Release AND upload everything to the
-# `comet-native-releases` R2 bucket (served at zeron.sh/releases/* for
-# `curl -fsSL https://zeron.sh/install.sh | sh`), bumping latest.txt.
+# then create an immutable GitHub Release and update a signed stable/beta
+# channel pointer. R2 mirroring is optional and never changes client trust.
 #
 # Trigger: push a tag `v<version>` matching the workspace version in
 # Cargo.toml (bump it in the same commit), or run manually via
@@ -19,6 +18,12 @@ on:
 permissions:
   contents: write
 
+env:
+  # Update metadata is fetched from a fixed GitHub release (`channel-stable`
+  # or `channel-beta`); each signed manifest points at immutable vX artifacts.
+  ZERON_UPDATE_URL: https://github.com/rarebek/zeron/releases/download
+  ZERON_UPDATE_PUBLIC_KEY: ${{ secrets.UPDATE_SIGNING_PUBLIC_KEY }}
+
 jobs:
   linux:
     strategy:
@@ -30,6 +35,9 @@ jobs:
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v4
+      - name: production update key guard
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: test -n "$ZERON_UPDATE_PUBLIC_KEY" || { echo "missing UPDATE_SIGNING_PUBLIC_KEY"; exit 1; }
       - name: gpui system deps
         run: |
           sudo apt-get update -qq
@@ -49,12 +57,8 @@ jobs:
           path: target/package/*.tar.gz
           if-no-files-found: error
 
-  # Heads-up: the macOS cfg paths (Keychain in agent_accounts.rs) have never
-  # been type-checked against the Apple SDK — this job may surface errors on
-  # its first runs. continue-on-error keeps the Linux release shippable.
-  #
-  # Signing/notarization (both optional — absent secrets fall back to an
-  # ad-hoc-signed build):
+  # Tagged production builds require signing and notarization. Manual workflow
+  # runs may still produce ad-hoc artifacts for CI smoke testing.
   #   MACOS_CERT_P12 / MACOS_CERT_PASSWORD — base64 "Developer ID Application"
   #     certificate + private key (.p12) and its export password.
   #   AC_API_KEY_P8 / AC_API_KEY_ID / AC_API_ISSUER_ID — App Store Connect API
@@ -62,7 +66,6 @@ jobs:
   #     script notarizes and staples the app + dmg (no Gatekeeper warning).
   macos:
     runs-on: macos-latest # Apple silicon
-    continue-on-error: true
     env:
       MACOS_CERT_P12: ${{ secrets.MACOS_CERT_P12 }}
       MACOS_CERT_PASSWORD: ${{ secrets.MACOS_CERT_PASSWORD }}
@@ -71,6 +74,15 @@ jobs:
       AC_API_ISSUER_ID: ${{ secrets.AC_API_ISSUER_ID }}
     steps:
       - uses: actions/checkout@v4
+      - name: production credential guard
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          test -n "$ZERON_UPDATE_PUBLIC_KEY" || { echo "missing UPDATE_SIGNING_PUBLIC_KEY"; exit 1; }
+          test -n "$MACOS_CERT_P12" || { echo "missing MACOS_CERT_P12"; exit 1; }
+          test -n "$MACOS_CERT_PASSWORD" || { echo "missing MACOS_CERT_PASSWORD"; exit 1; }
+          test -n "$AC_API_KEY_P8" || { echo "missing AC_API_KEY_P8"; exit 1; }
+          test -n "$AC_API_KEY_ID" || { echo "missing AC_API_KEY_ID"; exit 1; }
+          test -n "$AC_API_ISSUER_ID" || { echo "missing AC_API_ISSUER_ID"; exit 1; }
       - name: rust toolchain (rust-toolchain.toml)
         run: rustup show active-toolchain || rustup toolchain install
       - uses: Swatinem/rust-cache@v2
@@ -122,6 +134,7 @@ jobs:
       # the token through job env and gate on that instead.
       CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
       CLOUDFLARE_ACCOUNT_ID: b57dde68ee5964dccc025437b5478a5b
+      UPDATE_SIGNING_PRIVATE_KEY: ${{ secrets.UPDATE_SIGNING_PRIVATE_KEY }}
     steps:
       - uses: actions/download-artifact@v4
         with:
@@ -134,29 +147,70 @@ jobs:
           ls dist/ | grep -q "zeron-$ver-" \
             || { echo "tag v$ver does not match built artifact versions — bump Cargo.toml [workspace.package] version"; exit 1; }
           echo "VERSION=$ver" >> "$GITHUB_ENV"
+          if [[ "$ver" == *-* ]]; then
+            echo "CHANNEL=beta" >> "$GITHUB_ENV"
+          else
+            echo "CHANNEL=stable" >> "$GITHUB_ENV"
+          fi
+      - name: sign release manifest
+        run: |
+          test -n "$UPDATE_SIGNING_PRIVATE_KEY" || { echo "missing UPDATE_SIGNING_PRIVATE_KEY"; exit 1; }
+          test -n "$ZERON_UPDATE_PUBLIC_KEY" || { echo "missing UPDATE_SIGNING_PUBLIC_KEY"; exit 1; }
+          printf '%s' "$UPDATE_SIGNING_PRIVATE_KEY" > "$RUNNER_TEMP/update-signing.pem"
+          chmod 600 "$RUNNER_TEMP/update-signing.pem"
+
+          derived_public=$(openssl pkey -in "$RUNNER_TEMP/update-signing.pem" -pubout -outform DER \
+            | tail -c 32 | base64 -w0)
+          test "$derived_public" = "$ZERON_UPDATE_PUBLIC_KEY" \
+            || { echo "update signing public/private keys do not match"; exit 1; }
+
+          published_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+          artifact_base_url="https://github.com/${GITHUB_REPOSITORY}/releases/download/v${VERSION}"
+          manifest=$(jq -n \
+            --argjson schemaVersion 1 \
+            --arg channel "$CHANNEL" \
+            --arg version "$VERSION" \
+            --arg publishedAt "$published_at" \
+            --arg artifactBaseUrl "$artifact_base_url" \
+            '{schemaVersion:$schemaVersion,channel:$channel,version:$version,publishedAt:$publishedAt,artifactBaseUrl:$artifactBaseUrl,files:{}}')
+          for f in dist/*; do
+            name=$(basename "$f")
+            sha=$(sha256sum "$f" | cut -d' ' -f1)
+            size=$(stat -c '%s' "$f")
+            manifest=$(jq --arg name "$name" --arg sha "$sha" --argjson size "$size" \
+              '.files[$name] = {sha256:$sha,size:$size}' <<<"$manifest")
+          done
+          jq -cS . <<<"$manifest" > manifest.json
+          openssl pkeyutl -sign -rawin -inkey "$RUNNER_TEMP/update-signing.pem" \
+            -in manifest.json -out manifest.signature
+          base64 -w0 manifest.signature > manifest.json.sig
+          rm -f manifest.signature "$RUNNER_TEMP/update-signing.pem"
       - uses: softprops/action-gh-release@v2
         with:
-          files: dist/*
+          files: |
+            dist/*
+            manifest.json
+            manifest.json.sig
           generate_release_notes: true
+          prerelease: ${{ env.CHANNEL == 'beta' }}
+          make_latest: ${{ env.CHANNEL == 'stable' }}
+      - name: publish signed channel pointer
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          channel_tag="channel-$CHANNEL"
+          gh release view "$channel_tag" >/dev/null 2>&1 \
+            || gh release create "$channel_tag" --title "Zeron $CHANNEL channel" \
+              --notes "Signed pointer to the current $CHANNEL release." --latest=false
+          gh release upload "$channel_tag" manifest.json manifest.json.sig --clobber
       - name: upload to R2 (zeron.sh/releases/*)
         if: env.CLOUDFLARE_API_TOKEN != ''
         run: |
           for f in dist/*; do
-            npx wrangler@4 r2 object put "comet-native-releases/$(basename "$f")" \
+            npx wrangler@4 r2 object put "comet-native-releases/artifacts/$(basename "$f")" \
               --file "$f" --remote
           done
-          # manifest.json: version + per-artifact sha256 — the auto-updater
-          # (crates/update) verifies downloads against it. Published before
-          # latest.txt so no client ever sees a version without its checksums.
-          manifest=$(jq -n --arg version "$VERSION" '{version: $version, files: {}}')
-          for f in dist/*; do
-            sha=$(sha256sum "$f" | cut -d' ' -f1)
-            manifest=$(jq --arg name "$(basename "$f")" --arg sha "$sha" \
-              '.files[$name] = {sha256: $sha}' <<<"$manifest")
-          done
-          printf '%s' "$manifest" > manifest.json
-          npx wrangler@4 r2 object put comet-native-releases/manifest.json \
+          npx wrangler@4 r2 object put "comet-native-releases/channel-$CHANNEL/manifest.json" \
             --file manifest.json --remote
-          printf '%s' "$VERSION" > latest.txt
-          npx wrangler@4 r2 object put comet-native-releases/latest.txt \
-            --file latest.txt --remote
+          npx wrangler@4 r2 object put "comet-native-releases/channel-$CHANNEL/manifest.json.sig" \
+            --file manifest.json.sig --remote

@@ -1117,6 +1117,20 @@ impl Shell {
                 self.org = None;
             }
         }
+        // Authenticate and stage desktop updates in the background. Applying
+        // remains an explicit restart action, so active work is never cut off.
+        let should_stage_update = zeron_update::desktop_auto_update_enabled()
+            && self.settings.automatic_updates
+            && matches!(self.install, zeron_update::InstallKind::MacApp { .. })
+            && matches!(self.update_flow, UpdateFlow::Idle)
+            && state
+                .read(cx)
+                .update
+                .as_ref()
+                .is_some_and(|status| status.update_available);
+        if should_stage_update {
+            self.begin_update_download(cx);
+        }
         // The in-place local→synced switch: once the replacement runtime is
         // attached and Ready, kick the import (or finish) from here.
         self.drive_sync_switch(cx);
@@ -1865,13 +1879,25 @@ impl Shell {
             }
             SettingsSection::Appearance => {
                 if self.appearance_page.is_none() {
-                    let page = cx.new(|cx| AppearancePage::new(self.settings.window_mode, cx));
+                    let page = cx.new(|cx| {
+                        AppearancePage::new(
+                            self.settings.window_mode,
+                            self.settings.automatic_updates,
+                            cx,
+                        )
+                    });
                     self.appearance_page = Some(page.clone());
                     self.appearance_sub = Some(cx.subscribe(
                         &page,
                         |this: &mut Shell, _, event: &AppearanceEvent, cx| {
-                            let AppearanceEvent::WindowModeChanged(mode) = *event;
-                            this.settings.window_mode = mode;
+                            match *event {
+                                AppearanceEvent::WindowModeChanged(mode) => {
+                                    this.settings.window_mode = mode;
+                                }
+                                AppearanceEvent::AutomaticUpdatesChanged(enabled) => {
+                                    this.settings.automatic_updates = enabled;
+                                }
+                            }
                             this.schedule_save(cx);
                             cx.notify();
                         },
