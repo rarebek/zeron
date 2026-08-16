@@ -2,6 +2,17 @@
 
 Short, user-facing notes for every Zeron release.
 
+## [0.2.8] - 2026-08-16
+
+### Fixed
+
+- Remote runtime connections now rebuild automatically after an engine or SSH tunnel restart instead of leaving the app on stale loading and retry loops.
+- Localhost WebSocket probes fail faster while a remote tunnel is still starting.
+
+### Changed
+
+- Offline device choices now say “Runtime offline” so engine status cannot be mistaken for the Mac’s Wi-Fi status.
+
 ## [0.2.7] - 2026-08-16
 
 ### Fixed

@@ -1766,13 +1766,23 @@ impl Pickers {
                                         .child(SharedString::from("You")),
                                 )
                             })
-                            // Disconnected glyph, not the word (user request).
+                            // Name the runtime state explicitly. A bare crossed-Wi-Fi
+                            // glyph was mistaken for the Mac's system Wi-Fi status;
+                            // this is only the selected Zeron engine's reachability.
                             .when(!online, |el| {
                                 el.child(
-                                    crate::icons::icon(crate::icons::WIFI_OFF)
-                                        .size(px(12.0))
+                                    div()
                                         .flex_none()
-                                        .text_color(theme.warning.opacity(0.8)),
+                                        .flex()
+                                        .items_center()
+                                        .gap(px(4.0))
+                                        .text_size(px(10.0))
+                                        .text_color(theme.warning.opacity(0.8))
+                                        .child(
+                                            crate::icons::icon(crate::icons::WIFI_OFF)
+                                                .size(px(11.0)),
+                                        )
+                                        .child(SharedString::from("Runtime offline")),
                                 )
                             })
                         },

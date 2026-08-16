@@ -639,6 +639,8 @@ pub struct AppState {
     /// Data directory (`ui-settings.json`, `composer-defaults.json`); set at
     /// bootstrap so child views can persist small preference files.
     pub data_dir: Option<PathBuf>,
+    boot_config: Option<EngineBootConfig>,
+    engine_generation: u64,
     engine: Option<EngineHandle>,
     watch_tasks: Vec<Task<()>>,
     transcript_task: Option<Task<()>>,
@@ -670,6 +672,8 @@ impl AppState {
             local_device_id: None,
             update: None,
             data_dir: None,
+            boot_config: None,
+            engine_generation: 0,
             engine: None,
             watch_tasks: Vec::new(),
             transcript_task: None,
@@ -1101,11 +1105,13 @@ impl AppState {
     /// tokio, then attach subscriptions. Safe to call again after `Failed`.
     pub fn bootstrap(state: Entity<AppState>, config: EngineBootConfig, cx: &mut App) {
         let data_dir = config.data_dir.clone();
+        let saved_config = config.clone();
         state.update(cx, |s, cx| {
             s.connection = ConnectionStatus::Connecting;
             s.workspace_scope = None;
             s.auth = None;
             s.data_dir = Some(data_dir);
+            s.boot_config = Some(saved_config);
             cx.notify();
         });
         let boot = Tokio::spawn(cx, EngineHandle::bootstrap(config));
@@ -1134,6 +1140,8 @@ impl AppState {
     /// Methods the engine doesn't serve yet (chats/devices/auth land with the
     /// workspace doc in M4) fail their subscribe and are skipped gracefully.
     fn attach_engine(&mut self, handle: EngineHandle, cx: &mut Context<Self>) {
+        self.engine_generation = self.engine_generation.wrapping_add(1);
+        let generation = self.engine_generation;
         let engine_info = handle.engine_info();
         self.workspace_scope = Some(engine_info.workspace_scope);
         self.local_device_id = Some(engine_info.device_id.clone());
@@ -1178,6 +1186,9 @@ impl AppState {
             spawn_local_device_probe(cx, handle.clone()),
         ]);
         self.watch_tasks = watch_tasks;
+        if let Some(config) = self.boot_config.clone() {
+            spawn_remote_reconnect_watch(cx, handle.clone(), config, generation);
+        }
         // EngineInfo is part of the attachment boundary: views must know which
         // data profile they reached before they are allowed to render Ready.
         self.connection = ConnectionStatus::Ready;
@@ -1290,6 +1301,75 @@ impl AppState {
         })
         .detach();
     }
+}
+
+/// Replace a dead remote RPC client with a freshly bootstrapped handle.
+///
+/// Subscription retry loops cannot heal a transport restart by themselves:
+/// their receivers close, but retries still write to the original dead
+/// `RpcClient`. One detached supervisor owns the current remote connection,
+/// marks the shell Connecting as soon as it closes, then swaps in a complete
+/// new handle (and therefore a complete new set of subscriptions).
+fn spawn_remote_reconnect_watch(
+    cx: &mut Context<AppState>,
+    handle: EngineHandle,
+    config: EngineBootConfig,
+    generation: u64,
+) {
+    if !matches!(handle.mode(), EngineMode::Remote { .. }) {
+        return;
+    }
+
+    let (disconnected_tx, disconnected_rx) = tokio::sync::oneshot::channel();
+    let reconnecting_handle = handle.clone();
+    let reconnect = Tokio::spawn(cx, async move {
+        reconnecting_handle.client().closed().await;
+        let _ = disconnected_tx.send(());
+        EngineHandle::bootstrap(config).await
+    });
+
+    cx.spawn(async move |this, cx| {
+        if disconnected_rx.await.is_err() {
+            return;
+        }
+        let current = this
+            .update(cx, |state, cx| {
+                if state.engine_generation != generation {
+                    return false;
+                }
+                tracing::warn!(generation, "remote engine disconnected; reconnecting");
+                state.connection = ConnectionStatus::Connecting;
+                state.watch_tasks.clear();
+                state.transcript_task = None;
+                cx.notify();
+                true
+            })
+            .unwrap_or(false);
+        if !current {
+            return;
+        }
+
+        let outcome = match reconnect.await {
+            Ok(Ok(handle)) => Ok(handle),
+            Ok(Err(err)) => Err(format!("{err:#}")),
+            Err(join_err) => Err(join_err.to_string()),
+        };
+        this.update(cx, |state, cx| {
+            if state.engine_generation != generation {
+                return;
+            }
+            match outcome {
+                Ok(handle) => state.attach_engine(handle, cx),
+                Err(message) => {
+                    tracing::error!(%message, "remote engine reconnect failed");
+                    state.connection = ConnectionStatus::Failed(message);
+                    cx.notify();
+                }
+            }
+        })
+        .ok();
+    })
+    .detach();
 }
 
 /// Observe assembly after an early attach (cloud onboarding or another viewport
