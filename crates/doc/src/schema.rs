@@ -7,12 +7,13 @@
 //! - `commands`: LoroList of LoroMap {
 //!   id, kind, payload(json), issuedBy, issuedAt, basedOn?, expiresAt?, status, resolution? }
 //!
-//! Part maps: { id, kind: "text"|"tool"|"input"|"error", text?: LoroText, call?: json,
+//! Part maps: { id, kind: "text"|"commentary"|"notice"|"tool"|"input"|"error", text?: LoroText, call?: json,
 //! isError?, questions?: json, resolved?, message? }. Text bodies are **LoroText** so streaming
 //! appends RLE-merge (1.03x oplog overhead vs 125x for whole-value rewrites).
 
 use loro::{ExportMode, LoroDoc, LoroError, LoroList, LoroMap, LoroText, LoroValue, ToJson};
 use serde::{Deserialize, Serialize};
+use zeron_proto::NoticeLevel;
 
 use crate::commands::{SessionCommandEntry, SessionCommandStatus};
 use crate::constants::{SESSION_SCHEMA_VERSION, TAIL_MESSAGE_COUNT};
@@ -71,6 +72,8 @@ struct DocPartJson {
     resolved: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     message: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    level: Option<NoticeLevel>,
     /// Tool output summary (additive — absent on old rows and old writers;
     /// pre-strip writers stored up to 4KB of capped output here).
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -99,6 +102,19 @@ fn to_doc_part(part: &MessagePart) -> Result<DocPartJson, DocError> {
             id: id.clone(),
             kind: "text".into(),
             text: Some(text.clone()),
+            ..Default::default()
+        },
+        MessagePart::Commentary { id, text } => DocPartJson {
+            id: id.clone(),
+            kind: "commentary".into(),
+            text: Some(text.clone()),
+            ..Default::default()
+        },
+        MessagePart::Notice { id, level, message } => DocPartJson {
+            id: id.clone(),
+            kind: "notice".into(),
+            level: Some(*level),
+            message: Some(message.clone()),
             ..Default::default()
         },
         MessagePart::Tool {
@@ -177,6 +193,15 @@ fn from_doc_part(p: DocPartJson) -> MessagePart {
                 .and_then(|q| serde_json::from_value(q).ok())
                 .unwrap_or_default(),
             resolved: p.resolved.unwrap_or(false),
+        },
+        "commentary" => MessagePart::Commentary {
+            id: p.id,
+            text: p.text.unwrap_or_default(),
+        },
+        "notice" => MessagePart::Notice {
+            id: p.id,
+            level: p.level.unwrap_or(NoticeLevel::Warning),
+            message: p.message.unwrap_or_default(),
         },
         "error" => MessagePart::Error {
             id: p.id,
@@ -547,6 +572,15 @@ fn push_part(parts: &LoroList, part: &MessagePart) -> Result<(), DocError> {
     if let Some(message) = &doc_part.message {
         map.insert("message", message.as_str())?;
     }
+    if let Some(level) = doc_part.level {
+        map.insert(
+            "level",
+            match level {
+                NoticeLevel::Info => "info",
+                NoticeLevel::Warning => "warning",
+            },
+        )?;
+    }
     if let Some(output) = &doc_part.output {
         map.insert("output", output.as_str())?;
     }
@@ -670,10 +704,19 @@ fn salvage_part(part: &serde_json::Value, entry_id: &str, ix: usize) -> Option<M
         .map(str::to_owned)
         .unwrap_or_else(|| format!("{entry_id}#recovered-{ix}"));
     if let Some(text) = obj.get("text").and_then(|x| x.as_str()) {
-        return Some(MessagePart::Text {
-            id,
-            text: text.to_owned(),
-        });
+        return Some(
+            if obj.get("kind").and_then(|x| x.as_str()) == Some("commentary") {
+                MessagePart::Commentary {
+                    id,
+                    text: text.to_owned(),
+                }
+            } else {
+                MessagePart::Text {
+                    id,
+                    text: text.to_owned(),
+                }
+            },
+        );
     }
     if let Some(call) = obj
         .get("call")
@@ -702,10 +745,23 @@ fn salvage_part(part: &serde_json::Value, entry_id: &str, ix: usize) -> Option<M
         });
     }
     if let Some(message) = obj.get("message").and_then(|x| x.as_str()) {
-        return Some(MessagePart::Error {
-            id,
-            message: message.to_owned(),
-        });
+        return Some(
+            if obj.get("kind").and_then(|x| x.as_str()) == Some("notice") {
+                MessagePart::Notice {
+                    id,
+                    level: obj
+                        .get("level")
+                        .and_then(|x| serde_json::from_value(x.clone()).ok())
+                        .unwrap_or(NoticeLevel::Warning),
+                    message: message.to_owned(),
+                }
+            } else {
+                MessagePart::Error {
+                    id,
+                    message: message.to_owned(),
+                }
+            },
+        );
     }
     None
 }
@@ -823,6 +879,10 @@ impl<'a> SegmentWriter<'a> {
                         (
                             MessagePart::Text { text: old, .. },
                             MessagePart::Text { text: new, .. },
+                        )
+                        | (
+                            MessagePart::Commentary { text: old, .. },
+                            MessagePart::Commentary { text: new, .. },
                         ) if new.starts_with(old.as_str()) => {
                             // Trailing-text growth: append the suffix into the LoroText.
                             let delta = &new[old.len()..];
@@ -968,7 +1028,7 @@ pub fn materialize_tail(
 mod tests {
     use super::*;
     use crate::parts::fold_event_into_parts;
-    use zeron_proto::{AgentEvent, ToolCall};
+    use zeron_proto::{AgentEvent, NoticeLevel, ToolCall};
 
     fn user_entry(id: &str, text: &str) -> SessionMessageEntry {
         SessionMessageEntry {
@@ -1000,6 +1060,32 @@ mod tests {
             }]
         );
         assert_eq!(doc.chat_id().as_deref(), Some("chat-1"));
+    }
+
+    #[test]
+    fn round_trips_commentary_and_notices() {
+        let doc = SessionDoc::init("chat-activity").unwrap();
+        let expected = SessionMessageEntry {
+            id: "m1".into(),
+            role: MessageRole::Assistant,
+            parts: vec![
+                MessagePart::Commentary {
+                    id: "c0".into(),
+                    text: "Using the repository skill.".into(),
+                },
+                MessagePart::Notice {
+                    id: "n1".into(),
+                    level: NoticeLevel::Warning,
+                    message: "Some descriptions were shortened.".into(),
+                },
+            ],
+            created_at: 1,
+            device_id: "dev-a".into(),
+            status: Some(MessageStatus::Complete),
+            continuation_of: None,
+        };
+        doc.push_message(&expected).unwrap();
+        assert_eq!(doc.read_entries().unwrap(), vec![expected]);
     }
 
     #[test]

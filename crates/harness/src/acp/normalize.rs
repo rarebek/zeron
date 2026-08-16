@@ -9,7 +9,7 @@
 //! statuses are snake_case).
 
 use serde_json::Value;
-use zeron_proto::{AgentEvent, SlashCommand, TodoItem, ToolCall, ToolDiff};
+use zeron_proto::{AgentEvent, NoticeLevel, SlashCommand, TodoItem, ToolCall, ToolDiff};
 
 /// Byte cap applied to tool output text at the harness boundary. The doc-side
 /// fold applies its own (smaller) cap before anything persists; this one only
@@ -292,7 +292,29 @@ pub(crate) fn map_update(update: &Value) -> Vec<AgentEvent> {
         .unwrap_or("");
     match kind {
         "agent_message_chunk" => chunk_text(update)
-            .map(|text| vec![AgentEvent::TextDelta { text }])
+            .map(|text| {
+                let phase = update
+                    .get("_meta")
+                    .and_then(|meta| meta.get("codex"))
+                    .and_then(|codex| codex.get("phase"))
+                    .and_then(Value::as_str);
+                if phase == Some("commentary") {
+                    vec![AgentEvent::CommentaryDelta { text }]
+                } else if update.get("messageId").is_none()
+                    && let Some(message) = text
+                        .strip_prefix("Warning:")
+                        .or_else(|| text.strip_prefix("Config warning:"))
+                        .map(str::trim)
+                        .filter(|message| !message.is_empty())
+                {
+                    vec![AgentEvent::Notice {
+                        level: NoticeLevel::Warning,
+                        message: message.to_owned(),
+                    }]
+                } else {
+                    vec![AgentEvent::TextDelta { text }]
+                }
+            })
             .unwrap_or_default(),
         "agent_thought_chunk" => chunk_text(update)
             .map(|text| vec![AgentEvent::ReasoningDelta { text }])
@@ -490,6 +512,47 @@ mod tests {
             "content": { "type": "image", "data": "...", "mimeType": "image/png" },
         });
         assert_eq!(map_update(&image), Vec::new());
+    }
+
+    #[test]
+    fn codex_commentary_and_warnings_keep_their_semantics() {
+        let commentary = json!({
+            "sessionUpdate": "agent_message_chunk",
+            "content": { "type": "text", "text": "I’m checking the adapter." },
+            "_meta": { "codex": { "phase": "commentary" } },
+        });
+        assert_eq!(
+            map_update(&commentary),
+            vec![AgentEvent::CommentaryDelta {
+                text: "I’m checking the adapter.".into()
+            }]
+        );
+
+        let warning = json!({
+            "sessionUpdate": "agent_message_chunk",
+            "content": { "type": "text", "text": "Warning: Skill descriptions were shortened.\n\n" },
+        });
+        assert_eq!(
+            map_update(&warning),
+            vec![AgentEvent::Notice {
+                level: NoticeLevel::Warning,
+                message: "Skill descriptions were shortened.".into()
+            }]
+        );
+
+        // A real assistant message may legitimately begin with "Warning:";
+        // messageId distinguishes it from adapter-generated notices.
+        let final_answer = json!({
+            "sessionUpdate": "agent_message_chunk",
+            "messageId": "m1",
+            "content": { "type": "text", "text": "Warning: keep this as prose." },
+        });
+        assert_eq!(
+            map_update(&final_answer),
+            vec![AgentEvent::TextDelta {
+                text: "Warning: keep this as prose.".into()
+            }]
+        );
     }
 
     #[test]

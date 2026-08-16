@@ -5,7 +5,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use zeron_proto::{AgentEvent, ToolCall, ToolDiff, UserInputQuestion};
+use zeron_proto::{AgentEvent, NoticeLevel, ToolCall, ToolDiff, UserInputQuestion};
 
 use crate::constants::MSG_INLINE_MAX;
 
@@ -118,6 +118,15 @@ pub enum MessagePart {
         id: String,
         text: String,
     },
+    Commentary {
+        id: String,
+        text: String,
+    },
+    Notice {
+        id: String,
+        level: NoticeLevel,
+        message: String,
+    },
     #[serde(rename_all = "camelCase")]
     Tool {
         id: String,
@@ -169,6 +178,8 @@ impl MessagePart {
     pub fn id(&self) -> &str {
         match self {
             MessagePart::Text { id, .. }
+            | MessagePart::Commentary { id, .. }
+            | MessagePart::Notice { id, .. }
             | MessagePart::Tool { id, .. }
             | MessagePart::Input { id, .. }
             | MessagePart::Error { id, .. } => id,
@@ -177,7 +188,8 @@ impl MessagePart {
 
     pub fn byte_len(&self) -> usize {
         match self {
-            MessagePart::Text { text, .. } => text.len(),
+            MessagePart::Text { text, .. } | MessagePart::Commentary { text, .. } => text.len(),
+            MessagePart::Notice { message, .. } => message.len(),
             MessagePart::Tool {
                 call,
                 output,
@@ -230,6 +242,25 @@ pub fn fold_event_into_parts(out: &mut Vec<MessagePart>, event: &AgentEvent) {
                     text: text.clone(),
                 });
             }
+        }
+        AgentEvent::CommentaryDelta { text } => {
+            if let Some(MessagePart::Commentary { text: tail, .. }) = out.last_mut() {
+                tail.push_str(text);
+            } else {
+                let id = format!("c{}", out.len());
+                out.push(MessagePart::Commentary {
+                    id,
+                    text: text.clone(),
+                });
+            }
+        }
+        AgentEvent::Notice { level, message } => {
+            let id = format!("n{}", out.len());
+            out.push(MessagePart::Notice {
+                id,
+                level: *level,
+                message: message.clone(),
+            });
         }
         AgentEvent::ReasoningDelta { .. } => {
             // Reasoning is not rendered as a transcript part (matches zeron).
@@ -485,6 +516,30 @@ pub fn split_parts(parts: &[MessagePart]) -> Vec<Vec<MessagePart>> {
                     piece += 1;
                 }
             }
+            MessagePart::Commentary { id, text } if text.len() > MSG_INLINE_MAX => {
+                let mut start = 0usize;
+                let mut piece = 0usize;
+                while start < text.len() {
+                    let mut end = (start + MSG_INLINE_MAX).min(text.len());
+                    while end < text.len() && !text.is_char_boundary(end) {
+                        end -= 1;
+                    }
+                    if end <= start {
+                        end = text.len();
+                    }
+                    let sub = MessagePart::Commentary {
+                        id: if piece == 0 {
+                            id.clone()
+                        } else {
+                            format!("{id}~{piece}")
+                        },
+                        text: text[start..end].to_string(),
+                    };
+                    push_part(&mut chunks, &mut current_bytes, sub);
+                    start = end;
+                    piece += 1;
+                }
+            }
             other => push_part(&mut chunks, &mut current_bytes, other.clone()),
         }
     }
@@ -502,6 +557,50 @@ mod tests {
 
     fn text_delta(s: &str) -> AgentEvent {
         AgentEvent::TextDelta { text: s.into() }
+    }
+
+    #[test]
+    fn commentary_and_notices_fold_as_distinct_parts() {
+        let mut parts = Vec::new();
+        fold_event_into_parts(
+            &mut parts,
+            &AgentEvent::CommentaryDelta {
+                text: "Checking ".into(),
+            },
+        );
+        fold_event_into_parts(
+            &mut parts,
+            &AgentEvent::CommentaryDelta {
+                text: "the code.".into(),
+            },
+        );
+        fold_event_into_parts(
+            &mut parts,
+            &AgentEvent::Notice {
+                level: NoticeLevel::Warning,
+                message: "Context was shortened.".into(),
+            },
+        );
+        fold_event_into_parts(&mut parts, &text_delta("Done."));
+
+        assert_eq!(
+            parts,
+            vec![
+                MessagePart::Commentary {
+                    id: "c0".into(),
+                    text: "Checking the code.".into(),
+                },
+                MessagePart::Notice {
+                    id: "n1".into(),
+                    level: NoticeLevel::Warning,
+                    message: "Context was shortened.".into(),
+                },
+                MessagePart::Text {
+                    id: "t2".into(),
+                    text: "Done.".into(),
+                },
+            ]
+        );
     }
 
     #[test]

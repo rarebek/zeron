@@ -238,6 +238,14 @@ pub enum DoneStatus {
     Errored,
 }
 
+/// Severity for a passive transcript notice emitted by a harness.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum NoticeLevel {
+    Info,
+    Warning,
+}
+
 /// The normalized streaming event every harness emits.
 ///
 /// Mirrors zeron's `AgentEvent` tagged enum.
@@ -257,6 +265,15 @@ pub enum AgentEvent {
     },
     TextDelta {
         text: String,
+    },
+    /// Progress commentary that is useful context, but not the final answer.
+    CommentaryDelta {
+        text: String,
+    },
+    /// A structured, passive harness notice (for example a Codex warning).
+    Notice {
+        level: NoticeLevel,
+        message: String,
     },
     ReasoningDelta {
         text: String,

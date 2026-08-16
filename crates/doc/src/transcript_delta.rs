@@ -91,10 +91,13 @@ fn try_text_append(prev: &SessionMessageEntry, next: &SessionMessageEntry) -> Op
         if p == n {
             continue;
         }
-        let (MessagePart::Text { id: pid, text: pt }, MessagePart::Text { id: nid, text: nt }) =
-            (p, n)
-        else {
-            return None;
+        let (pid, pt, nid, nt) = match (p, n) {
+            (MessagePart::Text { id: pid, text: pt }, MessagePart::Text { id: nid, text: nt })
+            | (
+                MessagePart::Commentary { id: pid, text: pt },
+                MessagePart::Commentary { id: nid, text: nt },
+            ) => (pid, pt, nid, nt),
+            _ => return None,
         };
         if pid != nid || !nt.starts_with(pt.as_str()) || append.is_some() {
             return None;
@@ -222,11 +225,14 @@ pub fn apply_transcript_frame(
                 let Some(target) = current.iter_mut().find(|e| e.id == entry) else {
                     return Err(TranscriptDesync(format!("missing append entry {entry}")));
                 };
-                let Some(MessagePart::Text { text: tail, .. }) = target
-                    .parts
-                    .iter_mut()
-                    .find(|p| matches!(p, MessagePart::Text { id, .. } if *id == part))
-                else {
+                let Some(tail) = target.parts.iter_mut().find_map(|p| match p {
+                    MessagePart::Text { id, text } | MessagePart::Commentary { id, text }
+                        if *id == part =>
+                    {
+                        Some(text)
+                    }
+                    _ => None,
+                }) else {
                     return Err(TranscriptDesync(format!("missing append part {part}")));
                 };
                 tail.push_str(&text);
@@ -267,6 +273,28 @@ mod tests {
             status: None,
             continuation_of: None,
         }
+    }
+
+    #[test]
+    fn commentary_streams_through_the_append_fast_path() {
+        let mut before = entry("m1", "");
+        before.parts = vec![MessagePart::Commentary {
+            id: "c0".into(),
+            text: "Checking".into(),
+        }];
+        let mut after = before.clone();
+        after.parts = vec![MessagePart::Commentary {
+            id: "c0".into(),
+            text: "Checking the code".into(),
+        }];
+        let frame = diff_transcript(&[before.clone()], &[after.clone()]);
+        assert!(matches!(
+            &frame,
+            TranscriptFrame::Delta { append, .. } if append.len() == 1
+        ));
+        let mut current = vec![before];
+        apply_transcript_frame(&mut current, frame).unwrap();
+        assert_eq!(current, vec![after]);
     }
 
     fn apply(prev: &[SessionMessageEntry], next: &[SessionMessageEntry]) {

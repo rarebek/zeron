@@ -39,7 +39,7 @@ use gpui::{
 };
 
 use zeron_doc::{MessagePart, MessageRole, MessageStatus, SessionMessageEntry};
-use zeron_proto::ToolCall;
+use zeron_proto::{NoticeLevel, ToolCall};
 
 use crate::markdown::parser::{Block, BlockTree, IncrementalParser, parse_full};
 use crate::markdown::render::{self, RenderCache, RenderOptions};
@@ -514,6 +514,14 @@ pub enum RowKind {
         tree: Arc<BlockTree>,
         block_ix: usize,
     },
+    Commentary {
+        text: SharedString,
+        streaming: bool,
+    },
+    Notice {
+        level: NoticeLevel,
+        message: SharedString,
+    },
     ToolGroup {
         tools: Arc<Vec<ToolItem>>,
         auto_open: bool,
@@ -786,6 +794,42 @@ pub fn rows_for_entry(
                                 },
                             });
                         }
+                    }
+                    MessagePart::Commentary { id: part_id, text } => {
+                        if text.trim().is_empty() {
+                            continue;
+                        }
+                        rows.push(Row {
+                            id: format!("{}#{}", entry.id, part_id).into(),
+                            version: (fnv1a(text.as_bytes()) << 1) | streaming as u64,
+                            turn_start: false,
+                            kind: RowKind::Commentary {
+                                text: text.trim().into(),
+                                streaming,
+                            },
+                            entry_id: entry_id.clone(),
+                            timestamp: None,
+                        });
+                    }
+                    MessagePart::Notice {
+                        id: part_id,
+                        level,
+                        message,
+                    } => {
+                        if message.trim().is_empty() {
+                            continue;
+                        }
+                        rows.push(Row {
+                            id: format!("{}#{}", entry.id, part_id).into(),
+                            version: fnv1a(message.as_bytes()),
+                            turn_start: false,
+                            kind: RowKind::Notice {
+                                level: *level,
+                                message: message.trim().into(),
+                            },
+                            entry_id: entry_id.clone(),
+                            timestamp: None,
+                        });
                     }
                     MessagePart::Input {
                         id: part_id,
@@ -2870,6 +2914,10 @@ impl Transcript {
             RowKind::ToolGroup { tools, auto_open } => {
                 self.render_tool_group(&row.id, tools, *auto_open, &theme, cx)
             }
+            RowKind::Commentary { text, streaming } => {
+                commentary_block(text.clone(), *streaming, &theme)
+            }
+            RowKind::Notice { level, message } => notice_chip(*level, message.clone(), &theme),
             RowKind::InputChip { header, resolved } => {
                 input_chip(header.clone(), *resolved, &theme)
             }
@@ -3605,6 +3653,96 @@ fn error_chip(message: SharedString, theme: &Theme) -> AnyElement {
         .into_any_element()
 }
 
+/// Codex commentary is supporting context, not the answer. Keep it readable
+/// without letting it compete with final prose: a quiet rail, compact type,
+/// and a slightly stronger live accent while commentary is still streaming.
+fn commentary_block(text: SharedString, streaming: bool, theme: &Theme) -> AnyElement {
+    div()
+        .w_full()
+        .py(px(3.0))
+        .pl(px(2.0))
+        .child(
+            div()
+                .min_w_0()
+                .w_full()
+                .flex()
+                .items_start()
+                .gap(px(10.0))
+                .border_l_2()
+                .border_color(
+                    theme
+                        .text_muted
+                        .opacity(if streaming { 0.34 } else { 0.18 }),
+                )
+                .pl(px(12.0))
+                .py(px(3.0))
+                .text_size(px(13.0))
+                .line_height(px(20.0))
+                .text_color(theme.text_muted.opacity(0.78))
+                .child(text),
+        )
+        .into_any_element()
+}
+
+/// Passive harness notice. Warnings get a warm, low-contrast wash; info
+/// notices stay neutral. Both wrap, because configuration warnings often
+/// contain the only actionable explanation for a degraded run.
+fn notice_chip(level: NoticeLevel, message: SharedString, theme: &Theme) -> AnyElement {
+    let (accent, label, icon_name) = match level {
+        NoticeLevel::Info => (theme.text_muted, "Note", crate::icons::INFO_CIRCLE),
+        NoticeLevel::Warning => (theme.warning, "Warning", crate::icons::DANGER_TRIANGLE),
+    };
+    div()
+        .py(px(4.0))
+        .w_full()
+        .child(
+            div()
+                .min_h(px(34.0))
+                .w_full()
+                .flex()
+                .items_center()
+                .gap(px(8.0))
+                .overflow_hidden()
+                .rounded(px(10.0))
+                .border_1()
+                .border_color(accent.opacity(0.16))
+                .bg(accent.opacity(0.055))
+                .px(px(8.0))
+                .py(px(7.0))
+                .text_size(px(12.0))
+                .child(
+                    div()
+                        .flex_none()
+                        .size(px(20.0))
+                        .rounded(px(6.0))
+                        .bg(accent.opacity(0.12))
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .child(
+                            crate::icons::icon(icon_name)
+                                .size(px(12.0))
+                                .text_color(accent.opacity(0.86)),
+                        ),
+                )
+                .child(
+                    div()
+                        .flex_none()
+                        .font_weight(gpui::FontWeight::MEDIUM)
+                        .text_color(accent.opacity(0.9))
+                        .child(SharedString::from(label)),
+                )
+                .child(
+                    div()
+                        .min_w_0()
+                        .flex_1()
+                        .text_color(theme.text.opacity(0.82))
+                        .child(message),
+                ),
+        )
+        .into_any_element()
+}
+
 /// A passive one-line chip marking a question the agent asked — the
 /// interactive controls live in the composer (chat-view.tsx `InputChip`):
 /// 34px row, `rounded-[10px] border-white/[0.08] bg-white/[0.045] px-2
@@ -4243,6 +4381,37 @@ mod tests {
     }
 
     const MD: &str = "# Title\n\npara one\n\n```rust\nlet x = 1;\n```";
+
+    #[test]
+    fn commentary_and_notices_get_distinct_rows() {
+        let entry = assistant(
+            "m1",
+            MessageStatus::Complete,
+            vec![
+                MessagePart::Commentary {
+                    id: "c0".into(),
+                    text: "Using the repository skill.".into(),
+                },
+                MessagePart::Notice {
+                    id: "n1".into(),
+                    level: NoticeLevel::Warning,
+                    message: "Some descriptions were shortened.".into(),
+                },
+                text_part("t2", "Done."),
+            ],
+        );
+        let rows = rows_for_entry(&entry, false, &mut parse);
+        assert_eq!(rows.len(), 3);
+        assert!(matches!(rows[0].kind, RowKind::Commentary { .. }));
+        assert!(matches!(
+            rows[1].kind,
+            RowKind::Notice {
+                level: NoticeLevel::Warning,
+                ..
+            }
+        ));
+        assert!(matches!(rows[2].kind, RowKind::Markdown { .. }));
+    }
 
     #[test]
     fn live_entry_splits_per_block_with_id_continuity() {
