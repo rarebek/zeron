@@ -10,33 +10,18 @@
 //! `set_mode` repaints every window, so this page has nothing of its own to hold.
 
 use gpui::{
-    AnyElement, Context, EventEmitter, Hsla, IntoElement, Render, SharedString, Window, div,
-    prelude::*, px,
+    AnyElement, Context, Hsla, IntoElement, Render, SharedString, Window, div, prelude::*, px,
 };
 
 use crate::appearance::{self, AppearanceMode};
-use crate::settings::{WindowMode, widgets};
+use crate::settings::widgets;
 use crate::theme::{Appearance, Theme};
 
-#[derive(Debug, Clone, Copy)]
-pub enum AppearanceEvent {
-    WindowModeChanged(WindowMode),
-    AutomaticUpdatesChanged(bool),
-}
-
-pub struct AppearancePage {
-    window_mode: WindowMode,
-    automatic_updates: bool,
-}
-
-impl EventEmitter<AppearanceEvent> for AppearancePage {}
+pub struct AppearancePage;
 
 impl AppearancePage {
-    pub fn new(window_mode: WindowMode, automatic_updates: bool, _cx: &mut Context<Self>) -> Self {
-        Self {
-            window_mode,
-            automatic_updates,
-        }
+    pub fn new(_cx: &mut Context<Self>) -> Self {
+        Self
     }
 }
 
@@ -181,8 +166,6 @@ impl Render for AppearancePage {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = Theme::of(cx).clone();
         let current = appearance::mode(cx);
-        let window_mode = self.window_mode;
-        let automatic_updates = self.automatic_updates;
         let system = cx
             .try_global::<appearance::AppearanceState>()
             .map(|state| state.system)
@@ -229,97 +212,6 @@ impl Render for AppearancePage {
                             .text_color(theme.text_muted)
                             .line_height(px(18.0))
                             .child(helper(current, system)),
-                    )
-                    .child(
-                        div()
-                            .mt(px(32.0))
-                            .flex()
-                            .flex_col()
-                            .gap(px(12.0))
-                            .child(widgets::field_label(&theme, "Window on launch"))
-                            .child(
-                                widgets::option_card_row().children(WindowMode::ALL.into_iter().map(
-                                    |mode| {
-                                        widgets::option_card(
-                                            &theme,
-                                            mode.label(),
-                                            mode == window_mode,
-                                            div().size_full().into_any_element(),
-                                        )
-                                        .id(SharedString::from(format!("window-mode-{}", mode.label())))
-                                        .on_click(cx.listener(move |this, _, _, cx| {
-                                            this.window_mode = mode;
-                                            cx.emit(AppearanceEvent::WindowModeChanged(mode));
-                                            cx.notify();
-                                        }))
-                                    },
-                                )),
-                            )
-                            .child(
-                                div()
-                                    .text_size(px(12.0))
-                                    .text_color(theme.text_muted)
-                                    .line_height(px(18.0))
-                                    .child(SharedString::from(match window_mode {
-                                        WindowMode::RememberLastSize => {
-                                            "Opens as a normal window using the saved restore size."
-                                        }
-                                        WindowMode::FitScreen => {
-                                            "Opens as a normal window fitted inside the current display."
-                                        }
-                                        WindowMode::Maximized => {
-                                            "Opens maximized on the current display."
-                                        }
-                                    })),
-                            ),
-                    )
-                    .child(
-                        div()
-                            .mt(px(32.0))
-                            .flex()
-                            .flex_col()
-                            .gap(px(12.0))
-                            .child(widgets::field_label(&theme, "Updates"))
-                            .child(
-                                widgets::section_card(&theme).child(
-                                    widgets::card_row(&theme, false)
-                                        .child(
-                                            div()
-                                                .flex_1()
-                                                .min_w_0()
-                                                .flex()
-                                                .flex_col()
-                                                .child(widgets::row_title(
-                                                    &theme,
-                                                    "Automatic updates",
-                                                ))
-                                                .child(
-                                                    div()
-                                                        .mt(px(3.0))
-                                                        .text_size(px(12.0))
-                                                        .text_color(theme.text_muted)
-                                                        .child(
-                                                            "Securely download updates in the background and ask before restarting.",
-                                                        ),
-                                                ),
-                                        )
-                                        .child(
-                                            widgets::toggle_switch(&theme, automatic_updates)
-                                                .id("automatic-updates-toggle")
-                                                .cursor_pointer()
-                                                .on_click(cx.listener(|this, _, _, cx| {
-                                                    this.automatic_updates =
-                                                        !this.automatic_updates;
-                                                    cx.emit(
-                                                        AppearanceEvent::AutomaticUpdatesChanged(
-                                                            this.automatic_updates,
-                                                        ),
-                                                    );
-                                                    cx.notify();
-                                                })),
-                                        ),
-                                ),
-                            ),
                     ),
             )
     }

@@ -34,9 +34,10 @@ use crate::motion::{self, AnimationExt as _, MotionSpec, RESIZE, SPLASH_OUT, TAB
 use crate::popover::{self, Loadable};
 use crate::rail;
 use crate::settings::accounts::AccountsPage;
-use crate::settings::appearance::{AppearanceEvent, AppearancePage};
+use crate::settings::appearance::AppearancePage;
 use crate::settings::archived::ArchivedPage;
 use crate::settings::devices::DevicesPage;
+use crate::settings::general::{GeneralEvent, GeneralPage};
 use crate::settings::harnesses::HarnessesPage;
 use crate::settings::notifications::{NotificationsEvent, NotificationsPage};
 use crate::settings::shortcuts::{ShortcutsEvent, ShortcutsPage};
@@ -153,6 +154,7 @@ pub fn apply_keymap(cx: &mut App, keymap: &KeymapConfig) {
 /// The settings sections (feature-inventory §1.5 routes).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SettingsSection {
+    General,
     Devices,
     /// Which harnesses the composer offers (enable/disable toggles).
     Harnesses,
@@ -165,7 +167,8 @@ pub enum SettingsSection {
 }
 
 impl SettingsSection {
-    pub const ALL: [SettingsSection; 7] = [
+    pub const ALL: [SettingsSection; 8] = [
+        SettingsSection::General,
         SettingsSection::Devices,
         SettingsSection::Harnesses,
         SettingsSection::Agents,
@@ -179,6 +182,7 @@ impl SettingsSection {
     /// `settingsTitle` — the same strings in both places).
     pub fn label(self) -> &'static str {
         match self {
+            SettingsSection::General => "General",
             SettingsSection::Devices => "Devices",
             SettingsSection::Harnesses => "Agents",
             SettingsSection::Agents => "Accounts",
@@ -491,7 +495,7 @@ enum UpdateFlow {
     Downloading,
     /// Staged bundle ready to swap in — one click restarts into it.
     Ready(PathBuf),
-    Failed(SharedString),
+    Failed,
 }
 
 fn desktop_update_status(
@@ -806,12 +810,13 @@ pub struct Shell {
     nav: NavHistory,
     devices_page: Option<Entity<DevicesPage>>,
     archived_page: Option<Entity<ArchivedPage>>,
+    general_page: Option<Entity<GeneralPage>>,
     appearance_page: Option<Entity<AppearancePage>>,
     notifications_page: Option<Entity<NotificationsPage>>,
     shortcuts_page: Option<Entity<ShortcutsPage>>,
     accounts_page: Option<Entity<AccountsPage>>,
     harnesses_page: Option<Entity<HarnessesPage>>,
-    appearance_sub: Option<Subscription>,
+    general_sub: Option<Subscription>,
     shortcuts_sub: Option<Subscription>,
     notifications_sub: Option<Subscription>,
     /// Session-row context menu: (chat id, window position).
@@ -989,9 +994,10 @@ impl Shell {
         // straight into a settings section — these pages have no deep link and
         // synthetic input can't reach them on headless compositors.
         let route = match std::env::var("ZERON_OPEN_ROUTE").ok().as_deref() {
-            Some("settings") | Some("settings/devices") => {
-                Route::Settings(SettingsSection::Devices)
+            Some("settings") | Some("settings/general") => {
+                Route::Settings(SettingsSection::General)
             }
+            Some("settings/devices") => Route::Settings(SettingsSection::Devices),
             Some("settings/agents") => Route::Settings(SettingsSection::Agents),
             Some("settings/harnesses") => Route::Settings(SettingsSection::Harnesses),
             Some("settings/appearance") => Route::Settings(SettingsSection::Appearance),
@@ -1047,12 +1053,13 @@ impl Shell {
             nav,
             devices_page: None,
             archived_page: None,
+            general_page: None,
             appearance_page: None,
             notifications_page: None,
             shortcuts_page: None,
             accounts_page: None,
             harnesses_page: None,
-            appearance_sub: None,
+            general_sub: None,
             shortcuts_sub: None,
             notifications_sub: None,
             chat_menu: popover::Popup::default(),
@@ -1852,6 +1859,37 @@ impl Shell {
     /// Lazily create the entity for a settings section and return it renderable.
     fn settings_outlet(&mut self, section: SettingsSection, cx: &mut Context<Self>) -> AnyElement {
         match section {
+            SettingsSection::General => {
+                if self.general_page.is_none() {
+                    let page = cx.new(|cx| {
+                        GeneralPage::new(
+                            self.settings.window_mode,
+                            self.settings.automatic_updates,
+                            cx,
+                        )
+                    });
+                    self.general_sub = Some(cx.subscribe(
+                        &page,
+                        |this: &mut Shell, _, event: &GeneralEvent, cx| {
+                            match *event {
+                                GeneralEvent::WindowModeChanged(mode) => {
+                                    this.settings.window_mode = mode;
+                                }
+                                GeneralEvent::AutomaticUpdatesChanged(enabled) => {
+                                    this.settings.automatic_updates = enabled;
+                                }
+                            }
+                            this.schedule_save(cx);
+                            cx.notify();
+                        },
+                    ));
+                    self.general_page = Some(page);
+                }
+                match &self.general_page {
+                    Some(page) => page.clone().into_any_element(),
+                    None => Empty.into_any_element(),
+                }
+            }
             SettingsSection::Devices => {
                 if self.devices_page.is_none() {
                     let state = self.state.clone();
@@ -1884,29 +1922,7 @@ impl Shell {
             }
             SettingsSection::Appearance => {
                 if self.appearance_page.is_none() {
-                    let page = cx.new(|cx| {
-                        AppearancePage::new(
-                            self.settings.window_mode,
-                            self.settings.automatic_updates,
-                            cx,
-                        )
-                    });
-                    self.appearance_page = Some(page.clone());
-                    self.appearance_sub = Some(cx.subscribe(
-                        &page,
-                        |this: &mut Shell, _, event: &AppearanceEvent, cx| {
-                            match *event {
-                                AppearanceEvent::WindowModeChanged(mode) => {
-                                    this.settings.window_mode = mode;
-                                }
-                                AppearanceEvent::AutomaticUpdatesChanged(enabled) => {
-                                    this.settings.automatic_updates = enabled;
-                                }
-                            }
-                            this.schedule_save(cx);
-                            cx.notify();
-                        },
-                    ));
+                    self.appearance_page = Some(cx.new(AppearancePage::new));
                 }
                 match &self.appearance_page {
                     Some(page) => page.clone().into_any_element(),
@@ -2933,6 +2949,7 @@ impl Shell {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let section_icon = |item: SettingsSection| match item {
+            SettingsSection::General => icons::SETTINGS_MINIMALISTIC,
             SettingsSection::Devices => icons::MONITOR,
             SettingsSection::Harnesses => icons::WIDGET,
             SettingsSection::Agents => icons::KEY_MINIMALISTIC,
@@ -3528,60 +3545,143 @@ impl Shell {
         }
         let mac_app = matches!(self.install, zeron_update::InstallKind::MacApp { .. });
 
-        let (label, clickable): (SharedString, bool) = if mac_app {
+        let (title, detail, action, clickable): (
+            SharedString,
+            SharedString,
+            Option<&'static str>,
+            bool,
+        ) = if mac_app {
             match &self.update_flow {
-                UpdateFlow::Idle => (format!("Update available — v{latest}").into(), true),
-                UpdateFlow::Downloading => (format!("Downloading v{latest}…").into(), false),
-                UpdateFlow::Ready(_) => ("Update ready — restart to apply".into(), true),
-                UpdateFlow::Failed(message) => (format!("Update failed: {message}").into(), true),
+                UpdateFlow::Idle => (
+                    "New Zeron update".into(),
+                    format!("v{latest} is available").into(),
+                    Some("Get"),
+                    true,
+                ),
+                UpdateFlow::Downloading => (
+                    "Updating Zeron".into(),
+                    format!("Downloading v{latest} securely…").into(),
+                    None,
+                    false,
+                ),
+                UpdateFlow::Ready(_) => (
+                    "Update ready".into(),
+                    format!("v{latest} · Restart to finish").into(),
+                    Some("Restart"),
+                    true,
+                ),
+                UpdateFlow::Failed => (
+                    "Update couldn’t finish".into(),
+                    format!("v{latest} · Try again").into(),
+                    Some("Retry"),
+                    true,
+                ),
             }
         } else {
             (
-                format!("Update available — v{latest} · run `zeron update`").into(),
+                "New Zeron update".into(),
+                format!("v{latest} · Run zeron update").into(),
+                Some("Dismiss"),
                 true,
             )
         };
-        let failed = matches!(self.update_flow, UpdateFlow::Failed(_));
-        let tone = if failed { theme.danger } else { theme.accent };
-        // Dark-purple GLASS tint (user request), not the 400-level accent as
-        // a fill: deep pigment at partial alpha tints the blur showing
-        // through instead of compositing into the slab that a bright indigo
-        // fill produced (earlier user report). Light chrome gets a lavender
-        // accent wash instead — dark purple under indigo-600 text goes muddy.
-        let (chip_bg, chip_bg_hover) = if failed {
-            (theme.danger.opacity(0.14), theme.danger.opacity(0.22))
+        let failed = matches!(self.update_flow, UpdateFlow::Failed);
+        let downloading = matches!(self.update_flow, UpdateFlow::Downloading);
+        let ready = matches!(self.update_flow, UpdateFlow::Ready(_));
+        let tone = if failed {
+            theme.danger
+        } else if ready {
+            theme.success
         } else {
-            match theme.appearance {
-                crate::theme::Appearance::Dark => {
-                    let purple = crate::theme::oklch(0.35, 0.12, 277.0);
-                    (purple.opacity(0.45), purple.opacity(0.60))
-                }
-                crate::theme::Appearance::Light => {
-                    (theme.accent.opacity(0.10), theme.accent.opacity(0.16))
-                }
-            }
+            theme.accent
         };
+
+        let leading = div()
+            .size(px(28.0))
+            .flex_none()
+            .rounded_full()
+            .bg(tone.opacity(0.12))
+            .flex()
+            .items_center()
+            .justify_center()
+            .child(if downloading {
+                loaders::mini_gradient_spinner("sidebar-update-download", 2.25, cx.entity_id(), cx)
+                    .into_any_element()
+            } else {
+                icon(if failed {
+                    icons::DANGER_TRIANGLE
+                } else if ready {
+                    icons::CHECK
+                } else {
+                    icons::ARROW_DOWN
+                })
+                .size(px(14.0))
+                .text_color(tone)
+                .into_any_element()
+            });
 
         let mut strip = div()
             .id("update-strip")
             .mx(px(Theme::SPACE_SM))
-            // No bottom margin: the user-menu block below carries its own
-            // SPACE_SM padding — doubling it read as a hole (user report).
-            .px(px(Theme::SPACE_SM))
-            .py(px(6.0))
-            .rounded(px(Theme::CONTROL_RADIUS))
-            .bg(chip_bg)
+            .px(px(9.0))
+            .py(px(8.0))
+            .rounded(px(10.0))
+            .border_1()
+            .border_color(tone.opacity(0.18))
+            .bg(theme.surface_raised)
             .flex()
             .flex_row()
             .items_center()
-            .text_size(px(11.0))
-            .font_weight(gpui::FontWeight::MEDIUM)
-            .text_color(tone)
-            .child(div().flex_1().min_w_0().child(label));
+            .gap(px(8.0))
+            .child(leading)
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .flex()
+                    .flex_col()
+                    .gap(px(1.0))
+                    .child(
+                        div()
+                            .truncate()
+                            .text_size(px(11.0))
+                            .line_height(px(14.0))
+                            .font_weight(gpui::FontWeight::SEMIBOLD)
+                            .text_color(theme.text)
+                            .child(title),
+                    )
+                    .child(
+                        div()
+                            .truncate()
+                            .text_size(px(10.0))
+                            .line_height(px(13.0))
+                            .text_color(theme.text_muted)
+                            .child(detail),
+                    ),
+            )
+            .when_some(action, |el, action| {
+                el.child(
+                    div()
+                        .h(px(24.0))
+                        .px(px(8.0))
+                        .flex_none()
+                        .rounded_full()
+                        .bg(tone.opacity(0.12))
+                        .flex()
+                        .items_center()
+                        .text_size(px(10.0))
+                        .font_weight(gpui::FontWeight::SEMIBOLD)
+                        .text_color(tone)
+                        .child(action),
+                )
+            });
         if clickable {
             strip = strip
                 .cursor_pointer()
-                .hover(move |s| s.bg(chip_bg_hover))
+                .hover(move |s| {
+                    s.bg(theme.surface_raised_hover)
+                        .border_color(tone.opacity(0.32))
+                })
                 .on_click(cx.listener(move |this, _, _, cx| this.on_update_strip_click(cx)));
         }
         Some(strip.into_any_element())
@@ -3599,7 +3699,7 @@ impl Shell {
             return;
         }
         match std::mem::replace(&mut self.update_flow, UpdateFlow::Idle) {
-            UpdateFlow::Idle | UpdateFlow::Failed(_) => self.begin_update_download(cx),
+            UpdateFlow::Idle | UpdateFlow::Failed => self.begin_update_download(cx),
             UpdateFlow::Downloading => self.update_flow = UpdateFlow::Downloading,
             UpdateFlow::Ready(staged) => self.apply_staged_update(staged, cx),
         }
@@ -3711,7 +3811,7 @@ impl Shell {
                     Ok(staged) => UpdateFlow::Ready(staged),
                     Err(message) => {
                         tracing::warn!(%message, "update download failed");
-                        UpdateFlow::Failed(message.into())
+                        UpdateFlow::Failed
                     }
                 };
                 cx.notify();
@@ -3735,7 +3835,7 @@ impl Shell {
             }
             Err(err) => {
                 tracing::error!(error = %err, "update apply failed");
-                self.update_flow = UpdateFlow::Failed(format!("{err:#}").into());
+                self.update_flow = UpdateFlow::Failed;
                 cx.notify();
             }
         }
@@ -3922,7 +4022,7 @@ impl Shell {
                     popover::menu_row(theme, false, "user-menu-settings")
                         .id("user-menu-settings")
                         .on_click(cx.listener(|this, _, _, cx| {
-                            this.open_settings(SettingsSection::Devices, cx)
+                            this.open_settings(SettingsSection::General, cx)
                         }))
                         .child(
                             icon(icons::SETTINGS_MINIMALISTIC)
