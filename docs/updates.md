@@ -2,7 +2,7 @@
 
 Zeron releases use two independent trust layers:
 
-1. GitHub Actions builds platform artifacts. macOS artifacts must be Developer ID signed and notarized.
+1. GitHub Actions builds platform artifacts. macOS supports a free ad-hoc-signed community mode and an optional Developer ID signed and notarized mode.
 2. An offline Ed25519 release key signs the exact bytes of `manifest.json`. Clients embed only the public key and reject unsigned or altered metadata.
 
 The stable and beta pointers live at:
@@ -24,7 +24,14 @@ openssl pkey -in update-signing.pem -pubout -outform DER \
 
 Store the PEM as the GitHub Actions secret `UPDATE_SIGNING_PRIVATE_KEY`. Store the printed base64 public key as `UPDATE_SIGNING_PUBLIC_KEY`. Keep an encrypted offline backup of the private key; never commit it or place it on a release server.
 
-Tagged macOS releases additionally require:
+The free community release mode requires no Apple credentials. It uses an
+ad-hoc macOS code signature for bundle integrity and the signed update manifest
+for publisher authenticity. A user's first downloaded installation can require
+right-clicking **Open** because Apple Gatekeeper does not recognize an ad-hoc
+signature as an identified developer.
+
+For frictionless public distribution, configure all of these optional Apple
+credentials together:
 
 - `MACOS_CERT_P12`
 - `MACOS_CERT_PASSWORD`
@@ -32,7 +39,10 @@ Tagged macOS releases additionally require:
 - `AC_API_KEY_ID`
 - `AC_API_ISSUER_ID`
 
-The release workflow fails closed when any production credential is absent or the public/private update keys do not match.
+The release workflow fails closed if Apple credentials are only partially
+configured or the public/private update keys do not match. With no Apple
+credentials it deliberately publishes a community release; with the complete
+set it requires Developer ID signing, notarization, and stapling.
 
 ## Publishing
 
@@ -47,7 +57,7 @@ Versions containing a SemVer prerelease suffix publish to `beta`; ordinary versi
 - Checks begin after startup and repeat every six hours; failed checks retry after 30 minutes.
 - HTTPS is mandatory except for explicit localhost development.
 - Manifest signatures, schema, channel, artifact name, byte length, and SHA-256 must all match.
-- macOS also requires `codesign --verify --deep --strict` and Gatekeeper acceptance before staging.
+- macOS always requires `codesign --verify --deep --strict`. Certificate-signed builds additionally require Gatekeeper acceptance; ad-hoc community builds derive publisher trust from the verified Ed25519 manifest.
 - macOS downloads automatically, asks for restart, retains the previous bundle, and restores it if the new process fails its launch health window.
 - Managed Linux installs stage into a versioned directory, atomically switch `current`, retain `previous`, wait for active sessions and terminals to finish, and roll back if service restart fails.
 - Source checkouts are report-only and update through Git.

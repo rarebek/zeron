@@ -57,8 +57,11 @@ jobs:
           path: target/package/*.tar.gz
           if-no-files-found: error
 
-  # Tagged production builds require signing and notarization. Manual workflow
-  # runs may still produce ad-hoc artifacts for CI smoke testing.
+  # macOS supports two release modes:
+  #   - community: no Apple credentials; the app is ad-hoc signed and the
+  #     Ed25519 release manifest is the publisher trust root.
+  #   - notarized: all Apple credentials are present; Developer ID signing,
+  #     notarization, and stapling are mandatory.
   #   MACOS_CERT_P12 / MACOS_CERT_PASSWORD — base64 "Developer ID Application"
   #     certificate + private key (.p12) and its export password.
   #   AC_API_KEY_P8 / AC_API_KEY_ID / AC_API_ISSUER_ID — App Store Connect API
@@ -74,15 +77,29 @@ jobs:
       AC_API_ISSUER_ID: ${{ secrets.AC_API_ISSUER_ID }}
     steps:
       - uses: actions/checkout@v4
-      - name: production credential guard
-        if: startsWith(github.ref, 'refs/tags/v')
+      - name: release credential guard
         run: |
-          test -n "$ZERON_UPDATE_PUBLIC_KEY" || { echo "missing UPDATE_SIGNING_PUBLIC_KEY"; exit 1; }
-          test -n "$MACOS_CERT_P12" || { echo "missing MACOS_CERT_P12"; exit 1; }
-          test -n "$MACOS_CERT_PASSWORD" || { echo "missing MACOS_CERT_PASSWORD"; exit 1; }
-          test -n "$AC_API_KEY_P8" || { echo "missing AC_API_KEY_P8"; exit 1; }
-          test -n "$AC_API_KEY_ID" || { echo "missing AC_API_KEY_ID"; exit 1; }
-          test -n "$AC_API_ISSUER_ID" || { echo "missing AC_API_ISSUER_ID"; exit 1; }
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            test -n "$ZERON_UPDATE_PUBLIC_KEY" || { echo "missing UPDATE_SIGNING_PUBLIC_KEY"; exit 1; }
+          fi
+
+          apple_values=(
+            "$MACOS_CERT_P12" "$MACOS_CERT_PASSWORD" "$AC_API_KEY_P8"
+            "$AC_API_KEY_ID" "$AC_API_ISSUER_ID"
+          )
+          present=0
+          for value in "${apple_values[@]}"; do
+            [[ -n "$value" ]] && present=$((present + 1))
+          done
+          if (( present != 0 && present != ${#apple_values[@]} )); then
+            echo "Apple release credentials must be configured all together or omitted for a community release"
+            exit 1
+          fi
+          if (( present == 0 )); then
+            echo "Building free community release (ad-hoc signed; no Apple notarization)"
+          else
+            echo "Building Developer ID signed and notarized release"
+          fi
       - name: rust toolchain (rust-toolchain.toml)
         run: rustup show active-toolchain || rustup toolchain install
       - uses: Swatinem/rust-cache@v2

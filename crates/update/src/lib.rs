@@ -542,9 +542,11 @@ pub async fn stage_mac_app(
     Ok(staged)
 }
 
-/// Require a valid deep signature and Gatekeeper acceptance before an app
-/// bundle can replace the running installation. The release manifest protects
-/// transport integrity; this protects the platform identity/notarization layer.
+/// Require a valid deep signature before an app bundle can replace the running
+/// installation. Community builds use an ad-hoc signature, with the Ed25519
+/// release manifest as their publisher trust root. Certificate-signed builds
+/// must additionally pass Gatekeeper, preserving the stricter Developer ID and
+/// notarization policy automatically when those credentials are available.
 fn validate_mac_app(bundle: &Path) -> anyhow::Result<()> {
     #[cfg(target_os = "macos")]
     {
@@ -552,14 +554,36 @@ fn validate_mac_app(bundle: &Path) -> anyhow::Result<()> {
             "codesign",
             &["--verify", "--deep", "--strict", &bundle.to_string_lossy()],
         )?;
-        run(
-            "spctl",
-            &["--assess", "--type", "execute", &bundle.to_string_lossy()],
-        )?;
+        let details = std::process::Command::new("codesign")
+            .args(["--display", "--verbose=4"])
+            .arg(bundle)
+            .output()
+            .context("inspecting macOS app signature")?;
+        if !details.status.success() {
+            bail!(
+                "codesign signature inspection failed ({}): {}",
+                details.status,
+                String::from_utf8_lossy(&details.stderr).trim()
+            );
+        }
+        // `codesign --display` writes its report to stderr.
+        let report = String::from_utf8_lossy(&details.stderr);
+        if !mac_signature_is_ad_hoc(&report) {
+            run(
+                "spctl",
+                &["--assess", "--type", "execute", &bundle.to_string_lossy()],
+            )?;
+        }
     }
     #[cfg(not(target_os = "macos"))]
     let _ = bundle;
     Ok(())
+}
+
+fn mac_signature_is_ad_hoc(report: &str) -> bool {
+    report
+        .lines()
+        .any(|line| line.trim().eq_ignore_ascii_case("Signature=adhoc"))
 }
 
 fn mac_rollback_path(bundle: &Path) -> anyhow::Result<PathBuf> {
@@ -978,6 +1002,16 @@ mod tests {
             format!("zeron-0.2.0-{os}-{arch}.tar.gz")
         );
         assert!(mac_app_artifact("0.2.0").ends_with("-app.tar.gz"));
+    }
+
+    #[test]
+    fn detects_ad_hoc_macos_signature_report() {
+        assert!(mac_signature_is_ad_hoc(
+            "Executable=/Applications/Zeron.app/Contents/MacOS/zeron\nSignature=adhoc\n"
+        ));
+        assert!(!mac_signature_is_ad_hoc(
+            "Authority=Developer ID Application: Example Corp (ABCDE12345)\n"
+        ));
     }
 
     #[test]
