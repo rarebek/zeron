@@ -1,10 +1,10 @@
-# 0xc0ffe Studio
+# Zeron
 
 An all-in-one workspace for running, supervising, and coordinating coding agents (Claude Code, Codex, Cursor, Grok, Hermes, and Pi), locally by default with optional multi-device sync.
 
-![0xc0ffe Studio driving a coding-agent session with a live branch diff sidebar](apps/landing/public/assets/app-screenshot.jpg)
+![Zeron driving a coding-agent session with a live branch diff sidebar](apps/landing/public/assets/app-screenshot.jpg)
 
-> This is an independent 0xc0ffe Studio derivative of [zeronsh/comet](https://github.com/zeronsh/comet). The upstream MIT license and third-party notices are retained. The inherited `zeron` binary and package identifiers are transitional while the platform is being rebranded.
+> Zeron is an independent fork of [zeronsh/comet](https://github.com/zeronsh/comet), maintained by rarebek. It is not affiliated with or endorsed by the upstream project. The upstream MIT license and third-party notices are retained.
 
 Every device runs a small engine that stores sessions on that device. A new installation starts in local-only mode without an account or a network connection.
 
