@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.0xc0ffe.private-edge</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>__ZERON_DATA_DIR__/bin/private-edge-supervisor.sh</string>
+    </array>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>HOME</key>
+        <string>__ZERON_HOME__</string>
+        <key>PATH</key>
+        <string>/usr/bin:/bin:/usr/sbin:/sbin</string>
+        <key>ZERON_PRIVATE_EDGE_STATE_DIR</key>
+        <string>__ZERON_DATA_DIR__/private-edge-state</string>
+        <key>ZERON_PRIVATE_EDGE_DIR</key>
+        <string>__ZERON_DATA_DIR__/private-edge-app</string>
+    </dict>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+    <key>ThrottleInterval</key>
+    <integer>3</integer>
+    <key>ProcessType</key>
+    <string>Background</string>
+    <key>StandardOutPath</key>
+    <string>__ZERON_HOME__/Library/Logs/0xc0ffe-private-edge.log</string>
+    <key>StandardErrorPath</key>
+    <string>__ZERON_HOME__/Library/Logs/0xc0ffe-private-edge.log</string>
+</dict>
+</plist>
