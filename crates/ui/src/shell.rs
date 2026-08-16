@@ -965,6 +965,9 @@ impl Shell {
         });
         let data_dir = boot.data_dir.clone();
         let settings = UiSettings::load(&data_dir);
+        if settings.notifications_enabled {
+            crate::notify::initialize();
+        }
         // Bind the customizable shortcuts from the persisted keymap.
         apply_keymap(cx, &settings.keymap);
         // Dev/testing knob: `ZERON_OPEN_ROUTE=settings[/<section>]` boots
@@ -1888,6 +1891,9 @@ impl Shell {
                             } = *event;
                             this.settings.sound_enabled = sound;
                             this.settings.notifications_enabled = desktop;
+                            if desktop {
+                                crate::notify::initialize();
+                            }
                             this.settings.notifications_background_only = background_only;
                             this.schedule_save(cx);
                             cx.notify();
