@@ -38,6 +38,7 @@ pub struct RpcClient {
     shared: Arc<Shared>,
     next_id: AtomicU64,
     reader: tokio::task::JoinHandle<()>,
+    closed: tokio::sync::watch::Receiver<bool>,
 }
 
 impl RpcClient {
@@ -48,6 +49,7 @@ impl RpcClient {
         });
         let reader_shared = shared.clone();
         let reader_out = out.clone();
+        let (closed_tx, closed) = tokio::sync::watch::channel(false);
         let reader = tokio::spawn(async move {
             while let Some(payload) = inbound.recv().await {
                 for line in payload.lines() {
@@ -76,12 +78,31 @@ impl RpcClient {
                 }
                 // Streams end by sender drop.
             }
+            closed_tx.send_replace(true);
         });
         Self {
             out,
             shared,
             next_id: AtomicU64::new(1),
             reader,
+            closed,
+        }
+    }
+
+    /// Resolve when this client's underlying transport reader ends.
+    ///
+    /// Stream receivers closing is enough for an individual subscription to
+    /// retry, but every retry would otherwise reuse the same dead sender. The
+    /// UI uses this connection-level signal to replace the whole remote client.
+    pub async fn closed(&self) {
+        let mut closed = self.closed.clone();
+        if *closed.borrow() {
+            return;
+        }
+        while closed.changed().await.is_ok() {
+            if *closed.borrow() {
+                return;
+            }
         }
     }
 
@@ -210,7 +231,7 @@ async fn route_frame(shared: &Arc<Shared>, out: &mpsc::Sender<String>, frame: Se
 /// *any* other process holding the port accepts the TCP connection and then
 /// never completes the WebSocket handshake, and the caller waits forever — a
 /// stranger on port 27654 would hang the app at boot rather than degrade it.
-const CONNECT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+const CONNECT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(2);
 
 /// Dial a WebSocket RPC server (`ws://127.0.0.1:{ipc_port}`).
 pub async fn connect_ws(url: &str) -> Result<RpcClient, RpcError> {
@@ -248,4 +269,27 @@ pub async fn connect_ws(url: &str) -> Result<RpcClient, RpcError> {
         }
     });
     Ok(RpcClient::new(out_tx, in_rx))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn closed_resolves_when_the_transport_reader_ends() {
+        let (out_tx, _out_rx) = mpsc::channel(1);
+        let (in_tx, in_rx) = mpsc::channel(1);
+        let client = RpcClient::new(out_tx, in_rx);
+
+        drop(in_tx);
+
+        tokio::time::timeout(std::time::Duration::from_secs(1), client.closed())
+            .await
+            .expect("closed signal timed out");
+        // The signal remains observable by supervisors that start after the
+        // transport has already gone away.
+        tokio::time::timeout(std::time::Duration::from_secs(1), client.closed())
+            .await
+            .expect("latched closed signal timed out");
+    }
 }
