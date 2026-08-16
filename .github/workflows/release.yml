@@ -216,10 +216,12 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           channel_tag="channel-$CHANNEL"
-          gh release view "$channel_tag" >/dev/null 2>&1 \
-            || gh release create "$channel_tag" --title "Zeron $CHANNEL channel" \
+          gh release view "$channel_tag" -R "$GITHUB_REPOSITORY" >/dev/null 2>&1 \
+            || gh release create "$channel_tag" -R "$GITHUB_REPOSITORY" \
+              --title "Zeron $CHANNEL channel" \
               --notes "Signed pointer to the current $CHANNEL release." --latest=false
-          gh release upload "$channel_tag" manifest.json manifest.json.sig --clobber
+          gh release upload "$channel_tag" manifest.json manifest.json.sig \
+            -R "$GITHUB_REPOSITORY" --clobber
       - name: upload to R2 (zeron.sh/releases/*)
         if: env.CLOUDFLARE_API_TOKEN != ''
         run: |
