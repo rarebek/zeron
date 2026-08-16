@@ -1,8 +1,10 @@
-# Zeron
+# 0xc0ffe Studio
 
-Control your coding agents (Claude Code, Codex, Cursor, Grok, Hermes, Pi) locally by default, with optional multi-device sync.
+An all-in-one workspace for running, supervising, and coordinating coding agents (Claude Code, Codex, Cursor, Grok, Hermes, and Pi), locally by default with optional multi-device sync.
 
-![Zeron driving a Claude Code session with a live branch diff sidebar](apps/landing/public/assets/app-screenshot.jpg)
+![0xc0ffe Studio driving a coding-agent session with a live branch diff sidebar](apps/landing/public/assets/app-screenshot.jpg)
+
+> This is an independent 0xc0ffe Studio derivative of [zeronsh/comet](https://github.com/zeronsh/comet). The upstream MIT license and third-party notices are retained. The inherited `zeron` binary and package identifiers are transitional while the platform is being rebranded.
 
 Every device runs a small engine that stores sessions on that device. A new installation starts in local-only mode without an account or a network connection.
 
@@ -49,6 +51,6 @@ On macOS: use the desktop release, or build `zeron` from source and run `zeron d
 
 ---
 
-Developing or curious how it works? [![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/zeronsh/comet) or check out [ARCHITECTURE.md](ARCHITECTURE.md).
+Developing or curious how it works? Check out [ARCHITECTURE.md](ARCHITECTURE.md).
 
 Licensed under the [MIT License](LICENSE).
