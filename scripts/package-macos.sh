@@ -2,7 +2,7 @@
 # macOS packaging: build the release binary for the host arch and produce
 #   target/package/zeron-<version>-macos-<arch>.dmg          (user download)
 #   target/package/zeron-<version>-macos-<arch>-app.tar.gz   (auto-updater)
-# containing Zeron.app (unsigned unless CODESIGN_IDENTITY is set).
+# containing Zeron.app (ad-hoc signed unless CODESIGN_IDENTITY is set).
 #
 # Usage: scripts/package-macos.sh
 # Env:   CODESIGN_IDENTITY="Developer ID Application: …" to sign the bundle.
@@ -42,6 +42,22 @@ done
 iconutil -c icns "$ICONSET" -o "$APP/Contents/Resources/zeron.icns"
 rm -rf "$ICONSET"
 
+NOTARY_VALUES=(
+  "${NOTARY_KEY_PATH:-}" "${NOTARY_KEY_ID:-}" "${NOTARY_ISSUER_ID:-}"
+)
+NOTARY_PRESENT=0
+for value in "${NOTARY_VALUES[@]}"; do
+  [[ -n "$value" ]] && NOTARY_PRESENT=$((NOTARY_PRESENT + 1))
+done
+if (( NOTARY_PRESENT != 0 && NOTARY_PRESENT != ${#NOTARY_VALUES[@]} )); then
+  echo "notary credentials must be configured all together" >&2
+  exit 1
+fi
+if (( NOTARY_PRESENT > 0 )) && [[ -z "${CODESIGN_IDENTITY:-}" ]]; then
+  echo "notarization requires CODESIGN_IDENTITY" >&2
+  exit 1
+fi
+
 if [[ -n "${CODESIGN_IDENTITY:-}" ]]; then
   # Hardened runtime + secure timestamp are both notarization requirements.
   # (No --deep: Apple deprecated it; the bundle is a single Mach-O anyway.)
@@ -61,7 +77,7 @@ notarize() {
     --issuer "$NOTARY_ISSUER_ID" --wait
 }
 NOTARIZE=false
-[[ -n "${NOTARY_KEY_PATH:-}" && -n "${NOTARY_KEY_ID:-}" && -n "${NOTARY_ISSUER_ID:-}" ]] && NOTARIZE=true
+(( NOTARY_PRESENT == ${#NOTARY_VALUES[@]} )) && NOTARIZE=true
 
 if $NOTARIZE; then
   # Staple the bundle BEFORE tarring it: the auto-updater swaps the .app with

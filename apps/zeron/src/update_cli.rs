@@ -38,9 +38,15 @@ pub async fn update(edge_url: &str, check_only: bool) -> anyhow::Result<()> {
             );
             match zeron_update::restart_service() {
                 Ok(()) => println!("engine service restarted."),
-                Err(err) => println!(
-                    "note: service restart failed ({err:#}) — restart the engine manually to finish."
-                ),
+                Err(err) => {
+                    eprintln!("service restart failed ({err:#}); restoring the previous version.");
+                    zeron_update::rollback_headless(&app_root)?;
+                    zeron_update::restart_service().map_err(|restart_err| {
+                        anyhow::anyhow!(
+                            "update rolled back, but the previous service could not restart: {restart_err:#}"
+                        )
+                    })?;
+                }
             }
             Ok(())
         }

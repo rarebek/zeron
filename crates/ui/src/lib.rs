@@ -72,9 +72,9 @@ fn register_fonts(cx: &App) {
     }
 }
 
+use settings::WindowMode;
 pub use state::EngineBootConfig;
 pub use zeron_proto::HarnessId;
-use settings::WindowMode;
 
 /// Everything the headed binary passes in (config/env resolution lives in
 /// `apps/zeron`, not here).
@@ -133,8 +133,11 @@ pub fn run_app(config: UiConfig) {
         if cx.windows().is_empty()
             && let Some(reopen) = cx.try_global::<ReopenState>()
         {
-            let (state, boot, window_mode) =
-                (reopen.state.clone(), reopen.boot.clone(), reopen.window_mode);
+            let (state, boot, window_mode) = (
+                reopen.state.clone(),
+                reopen.boot.clone(),
+                reopen.window_mode,
+            );
             open_main_window(state, boot, window_mode, cx);
         }
     });
@@ -147,11 +150,7 @@ pub fn run_app(config: UiConfig) {
         // palette while settings load.
         let data_dir = config.boot().data_dir.clone();
         let ui_settings = settings::UiSettings::load(&data_dir);
-        appearance::init(
-            ui_settings.appearance,
-            data_dir,
-            cx,
-        );
+        appearance::init(ui_settings.appearance, data_dir, cx);
         composer::init(cx);
         terminal::panel::init(cx);
         app_menus::init(cx);
