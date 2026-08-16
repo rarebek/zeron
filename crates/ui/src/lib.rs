@@ -74,6 +74,7 @@ fn register_fonts(cx: &App) {
 
 pub use state::EngineBootConfig;
 pub use zeron_proto::HarnessId;
+use settings::WindowMode;
 
 /// Everything the headed binary passes in (config/env resolution lives in
 /// `apps/zeron`, not here).
@@ -115,6 +116,7 @@ impl UiConfig {
 struct ReopenState {
     state: gpui::Entity<state::AppState>,
     boot: EngineBootConfig,
+    window_mode: WindowMode,
 }
 
 impl gpui::Global for ReopenState {}
@@ -131,8 +133,9 @@ pub fn run_app(config: UiConfig) {
         if cx.windows().is_empty()
             && let Some(reopen) = cx.try_global::<ReopenState>()
         {
-            let (state, boot) = (reopen.state.clone(), reopen.boot.clone());
-            open_main_window(state, boot, cx);
+            let (state, boot, window_mode) =
+                (reopen.state.clone(), reopen.boot.clone(), reopen.window_mode);
+            open_main_window(state, boot, window_mode, cx);
         }
     });
     app.run(move |cx: &mut App| {
@@ -143,8 +146,9 @@ pub fn run_app(config: UiConfig) {
         // final one on the very first frame, or the window flashes the wrong
         // palette while settings load.
         let data_dir = config.boot().data_dir.clone();
+        let ui_settings = settings::UiSettings::load(&data_dir);
         appearance::init(
-            settings::UiSettings::load(&data_dir).appearance,
+            ui_settings.appearance,
             data_dir,
             cx,
         );
@@ -174,8 +178,9 @@ pub fn run_app(config: UiConfig) {
         cx.set_global(ReopenState {
             state: state.clone(),
             boot: config.boot(),
+            window_mode: ui_settings.window_mode,
         });
-        open_main_window(state, config.boot(), cx);
+        open_main_window(state, config.boot(), ui_settings.window_mode, cx);
         // Native menu bar — macOS gets the standard app menu (About/Services/
         // Hide/Quit ⌘Q), Edit clipboard verbs routed to the focused input, and
         // a Window menu (⌘M/⌘W). Without this, `NSApp.mainMenu` stays nil: no
@@ -188,17 +193,25 @@ pub fn run_app(config: UiConfig) {
     });
 }
 
-/// Open the main window with a maximized initial state (min 900×600) with [`shell::Shell`] as the
+/// Open the main window using the user's persisted launch preference (min 900×600) with [`shell::Shell`] as the
 /// root view. Called at boot and again from `on_reopen` if the dock icon is
 /// clicked after ⌘W closed the window.
-fn open_main_window(state: gpui::Entity<state::AppState>, boot: EngineBootConfig, cx: &mut App) {
-    // The old fixed 1320×880 rectangle could open partly off-screen on the
-    // MacBook Air after display scaling changed. Maximized uses the current
-    // display's usable bounds and still keeps a restore rectangle for macOS.
+fn open_main_window(
+    state: gpui::Entity<state::AppState>,
+    boot: EngineBootConfig,
+    window_mode: WindowMode,
+    cx: &mut App,
+) {
     let restore_bounds = Bounds::centered(None, size(px(1200.), px(760.)), cx);
+    let window_bounds = match window_mode {
+        WindowMode::RememberLastSize | WindowMode::FitScreen => {
+            WindowBounds::Windowed(restore_bounds)
+        }
+        WindowMode::Maximized => WindowBounds::Maximized(restore_bounds),
+    };
     cx.open_window(
         WindowOptions {
-            window_bounds: Some(WindowBounds::Maximized(restore_bounds)),
+            window_bounds: Some(window_bounds),
             window_min_size: Some(size(px(900.), px(600.))),
             // `kind` is deliberately left at its default `WindowKind::Normal`
             // (gpui platform.rs WindowOptions::default), which on macOS maps

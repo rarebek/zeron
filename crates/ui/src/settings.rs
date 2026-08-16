@@ -43,9 +43,41 @@ pub const SAVE_DEBOUNCE_MS: u64 = 400;
 
 const FILE_NAME: &str = "ui-settings.json";
 
+/// How the main window should be created on launch.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum WindowMode {
+    /// Restore a normal window using the app's standard restore rectangle.
+    RememberLastSize,
+    /// Open a normal window sized to the current display's usable area.
+    FitScreen,
+    /// Let the platform maximize the window.
+    Maximized,
+}
+
+impl WindowMode {
+    pub const ALL: [Self; 3] = [Self::RememberLastSize, Self::FitScreen, Self::Maximized];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::RememberLastSize => "Remember last size",
+            Self::FitScreen => "Fit screen",
+            Self::Maximized => "Maximized",
+        }
+    }
+}
+
+impl Default for WindowMode {
+    fn default() -> Self {
+        Self::FitScreen
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct UiSettings {
+    /// Main window launch behavior.
+    pub window_mode: WindowMode,
     pub sidebar_width: f32,
     pub sidebar_collapsed: bool,
     /// Legacy: the grouped-by-project toggle predates spaces (which group by
@@ -99,6 +131,7 @@ pub struct UiSettings {
 impl Default for UiSettings {
     fn default() -> Self {
         Self {
+            window_mode: WindowMode::default(),
             sidebar_width: SIDEBAR_DEFAULT,
             sidebar_collapsed: false,
             sidebar_grouped: false,

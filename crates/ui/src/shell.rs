@@ -34,7 +34,7 @@ use crate::motion::{self, AnimationExt as _, MotionSpec, RESIZE, SPLASH_OUT, TAB
 use crate::popover::{self, Loadable};
 use crate::rail;
 use crate::settings::accounts::AccountsPage;
-use crate::settings::appearance::AppearancePage;
+use crate::settings::appearance::{AppearanceEvent, AppearancePage};
 use crate::settings::archived::ArchivedPage;
 use crate::settings::devices::DevicesPage;
 use crate::settings::harnesses::HarnessesPage;
@@ -799,6 +799,7 @@ pub struct Shell {
     shortcuts_page: Option<Entity<ShortcutsPage>>,
     accounts_page: Option<Entity<AccountsPage>>,
     harnesses_page: Option<Entity<HarnessesPage>>,
+    appearance_sub: Option<Subscription>,
     shortcuts_sub: Option<Subscription>,
     notifications_sub: Option<Subscription>,
     /// Session-row context menu: (chat id, window position).
@@ -1037,6 +1038,7 @@ impl Shell {
             shortcuts_page: None,
             accounts_page: None,
             harnesses_page: None,
+            appearance_sub: None,
             shortcuts_sub: None,
             notifications_sub: None,
             chat_menu: popover::Popup::default(),
@@ -1863,7 +1865,17 @@ impl Shell {
             }
             SettingsSection::Appearance => {
                 if self.appearance_page.is_none() {
-                    self.appearance_page = Some(cx.new(AppearancePage::new));
+                    let page = cx.new(|cx| AppearancePage::new(self.settings.window_mode, cx));
+                    self.appearance_page = Some(page.clone());
+                    self.appearance_sub = Some(cx.subscribe(
+                        &page,
+                        |this: &mut Shell, _, event: &AppearanceEvent, cx| {
+                            let AppearanceEvent::WindowModeChanged(mode) = *event;
+                            this.settings.window_mode = mode;
+                            this.schedule_save(cx);
+                            cx.notify();
+                        },
+                    ));
                 }
                 match &self.appearance_page {
                     Some(page) => page.clone().into_any_element(),
