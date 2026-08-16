@@ -228,12 +228,14 @@ pub fn render_block(
         ),
         Block::BlockQuote { children } => div()
             // Accent-tinted quote: indigo rail + a whisper of the same hue
-            // behind it (the inline-code treatment, dialed down).
+            // behind it (the inline-code treatment, dialed down). Clip the
+            // rail into the shared radius so the left edge does not leave
+            // square corners beside an otherwise rounded card.
             .border_l_2()
             .border_color(theme.accent.opacity(0.6))
             .bg(theme.accent.opacity(0.05))
-            .rounded_tr(px(6.0))
-            .rounded_br(px(6.0))
+            .rounded(px(6.0))
+            .overflow_hidden()
             .pl(px(12.0))
             .pr(px(10.0))
             .py(px(6.0))
