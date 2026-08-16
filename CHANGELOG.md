@@ -2,6 +2,18 @@
 
 Short, user-facing notes for every Zeron release.
 
+## [0.2.9] - 2026-08-17
+
+### Added
+
+- Codex commentary and genuine adapter warnings now render as distinct transcript activity instead of ordinary assistant prose.
+
+### Fixed
+
+- The private local edge is supervised by macOS and recovers automatically after crashes, while the reverse SSH tunnel reconnects the PC runtime without manual Wrangler startup.
+- The Mac runtime stays usable through its local edge when the PC runtime is unavailable.
+- Markdown callouts now round and clip all four corners, including the accented left edge.
+
 ## [0.2.8] - 2026-08-16
 
 ### Fixed
