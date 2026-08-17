@@ -689,6 +689,116 @@ impl RegistryDoc {
         Ok(true)
     }
 
+    /// Merge a superseded installation identity into another registered
+    /// device. This preserves the old device's projects and chats, re-homing
+    /// them onto `target_device_id`, and tombstones the stale device row in the
+    /// same registry batch.
+    ///
+    /// Spaces with the same absolute path are coalesced. Their chats move to
+    /// the target space and inherit its checkout identity. Unique spaces keep
+    /// their id/path but are re-owned by the target; checkout metadata is
+    /// cleared so the target engine can probe and stamp it again. Stale
+    /// session-status rows are deleted rather than made to look live.
+    pub fn merge_device(
+        &mut self,
+        source_device_id: &str,
+        target_device_id: &str,
+    ) -> Result<bool, DocError> {
+        if source_device_id == target_device_id
+            || !self.row_exists(KIND_DEVICES, source_device_id)
+            || !self.row_exists(KIND_DEVICES, target_device_id)
+        {
+            return Ok(false);
+        }
+
+        let source_spaces: Vec<_> = self
+            .read_spaces()?
+            .into_iter()
+            .filter(|space| space.device_id == source_device_id)
+            .collect();
+        let target_spaces: HashMap<_, _> = self
+            .read_spaces()?
+            .into_iter()
+            .filter(|space| space.device_id == target_device_id)
+            .map(|space| (space.path.clone(), space))
+            .collect();
+        let source_space_by_id: HashMap<_, _> = source_spaces
+            .iter()
+            .map(|space| (space.id.clone(), space))
+            .collect();
+
+        let hlc = self.next_hlc();
+        let mut ops = Vec::new();
+        let mut push = |kind: &str, id: &str, op: OpKind, set: Option<BTreeMap<String, Value>>| {
+            ops.push(RowOp {
+                kind: kind.to_string(),
+                id: id.to_string(),
+                op,
+                set,
+                hlc: hlc.clone(),
+                clocks: None,
+            });
+        };
+
+        for chat in self
+            .read_chats()?
+            .into_iter()
+            .filter(|chat| chat.device_id == source_device_id)
+        {
+            let matching_target = chat
+                .space_id
+                .as_ref()
+                .and_then(|id| source_space_by_id.get(id))
+                .and_then(|space| target_spaces.get(&space.path));
+            let mut set = fields([("deviceId", json!(target_device_id))]);
+            if let Some(space) = matching_target {
+                set.insert("spaceId".into(), json!(space.id));
+                set.insert(
+                    "checkoutId".into(),
+                    space
+                        .checkout_id
+                        .as_ref()
+                        .map_or(Value::Null, |id| json!(id)),
+                );
+            } else if chat
+                .space_id
+                .as_ref()
+                .is_some_and(|id| source_space_by_id.contains_key(id))
+            {
+                set.insert("checkoutId".into(), Value::Null);
+            }
+            push(KIND_CHATS, &chat.id, OpKind::Update, Some(set));
+        }
+
+        for space in &source_spaces {
+            if target_spaces.contains_key(&space.path) {
+                push(KIND_SPACES, &space.id, OpKind::Delete, None);
+            } else {
+                push(
+                    KIND_SPACES,
+                    &space.id,
+                    OpKind::Update,
+                    Some(fields([
+                        ("deviceId", json!(target_device_id)),
+                        ("gitCheckedAt", Value::Null),
+                        ("checkoutId", Value::Null),
+                    ])),
+                );
+            }
+        }
+
+        for session in self
+            .read_sessions()?
+            .into_iter()
+            .filter(|session| session.device_id == source_device_id)
+        {
+            push(KIND_SESSIONS, &session.chat_id, OpKind::Delete, None);
+        }
+        push(KIND_DEVICES, source_device_id, OpKind::Delete, None);
+        self.enqueue_ops(ops);
+        Ok(true)
+    }
+
     /// Stamp `lastSeenAt` on an existing device row (boot/shutdown only —
     /// periodic liveness rides presence frames, never rows).
     pub fn set_device_last_seen(

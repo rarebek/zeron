@@ -438,6 +438,76 @@ fn spaces_round_trip_and_mutate() {
 }
 
 #[test]
+fn merge_device_preserves_chats_and_coalesces_duplicate_spaces() {
+    let mut ws = RegistryDoc::new("new-mac");
+    ws.upsert_device(&device("old-mac", "MacBook")).unwrap();
+    ws.upsert_device(&device("new-mac", "MacBook")).unwrap();
+
+    let mut old_duplicate = space("old-project", "old-mac", "/repo/project");
+    old_duplicate.checkout_id = Some("old-checkout".into());
+    old_duplicate.git_checked_at = Some(ts(2_000));
+    let mut new_duplicate = space("new-project", "new-mac", "/repo/project");
+    new_duplicate.checkout_id = Some("new-checkout".into());
+    let mut old_unique = space("old-unique", "old-mac", "/repo/unique");
+    old_unique.checkout_id = Some("stale-checkout".into());
+    old_unique.git_checked_at = Some(ts(2_000));
+    ws.upsert_space(&old_duplicate).unwrap();
+    ws.upsert_space(&new_duplicate).unwrap();
+    ws.upsert_space(&old_unique).unwrap();
+
+    let mut duplicate_chat = chat("chat-duplicate", "old-mac");
+    duplicate_chat.space_id = Some("old-project".into());
+    duplicate_chat.checkout_id = Some("old-checkout".into());
+    let mut unique_chat = chat("chat-unique", "old-mac");
+    unique_chat.space_id = Some("old-unique".into());
+    unique_chat.checkout_id = Some("stale-checkout".into());
+    ws.upsert_chat(&duplicate_chat).unwrap();
+    ws.upsert_chat(&unique_chat).unwrap();
+    ws.upsert_session(&session(
+        "chat-duplicate",
+        "old-mac",
+        SessionStatus::Working,
+    ))
+    .unwrap();
+
+    assert!(ws.merge_device("old-mac", "new-mac").unwrap());
+    assert!(!ws.merge_device("new-mac", "new-mac").unwrap());
+    assert_eq!(
+        ws.read_devices()
+            .unwrap()
+            .into_iter()
+            .map(|device| device.id)
+            .collect::<Vec<_>>(),
+        vec!["new-mac"]
+    );
+
+    let spaces = ws.read_spaces().unwrap();
+    assert_eq!(spaces.len(), 2);
+    assert!(spaces.iter().any(|space| space.id == "new-project"));
+    let unique = spaces
+        .iter()
+        .find(|space| space.id == "old-unique")
+        .expect("unique project preserved");
+    assert_eq!(unique.device_id, "new-mac");
+    assert_eq!(unique.checkout_id, None);
+    assert_eq!(unique.git_checked_at, None);
+
+    let chats = ws.read_chats().unwrap();
+    let duplicate = chats
+        .iter()
+        .find(|chat| chat.id == "chat-duplicate")
+        .unwrap();
+    assert_eq!(duplicate.device_id, "new-mac");
+    assert_eq!(duplicate.space_id.as_deref(), Some("new-project"));
+    assert_eq!(duplicate.checkout_id.as_deref(), Some("new-checkout"));
+    let unique = chats.iter().find(|chat| chat.id == "chat-unique").unwrap();
+    assert_eq!(unique.device_id, "new-mac");
+    assert_eq!(unique.space_id.as_deref(), Some("old-unique"));
+    assert_eq!(unique.checkout_id, None);
+    assert!(ws.read_sessions().unwrap().is_empty());
+}
+
+#[test]
 fn chat_seen_is_monotonic() {
     let mut ws = RegistryDoc::new("dev-a");
     ws.upsert_chat(&chat("chat-1", "dev-a")).unwrap();

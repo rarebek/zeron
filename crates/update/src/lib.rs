@@ -654,21 +654,7 @@ pub fn relaunch_app_after_exit(bundle: &Path) {
         // Arguments carry paths separately from the script, so bundle names
         // cannot become shell syntax. If the new process does not stay alive
         // through the health window, restore the previous bundle and reopen it.
-        let script = r#"
-            old_pid="$1"; bundle="$2"; rollback="$3"
-            while /bin/kill -0 "$old_pid" 2>/dev/null; do sleep 0.2; done
-            /usr/bin/open "$bundle" || true
-            sleep 15
-            executable="$bundle/Contents/MacOS/zeron"
-            if /usr/bin/pgrep -f "$executable" >/dev/null 2>&1; then
-                /bin/rm -rf -- "$rollback"
-            elif [ -d "$rollback" ]; then
-                failed="$bundle.failed-$(date +%s)"
-                /bin/mv "$bundle" "$failed" 2>/dev/null || true
-                /bin/mv "$rollback" "$bundle"
-                /usr/bin/open "$bundle" || true
-            fi
-        "#;
+        let script = mac_relauncher_script();
         let mut command = std::process::Command::new("/bin/sh");
         command
             .args([
@@ -689,6 +675,32 @@ pub fn relaunch_app_after_exit(bundle: &Path) {
     }
     #[cfg(not(unix))]
     let _ = bundle;
+}
+
+/// The desktop bundle and its background runtime are one installation. After
+/// swapping the bundle, restart the launchd runtime before reopening the GUI so
+/// both roles execute the same newly-installed binary. `kickstart` is best
+/// effort: users who do not keep a background runtime installed still reopen
+/// normally and the GUI embeds its own runtime.
+#[cfg(unix)]
+fn mac_relauncher_script() -> &'static str {
+    r#"
+            old_pid="$1"; bundle="$2"; rollback="$3"
+            while /bin/kill -0 "$old_pid" 2>/dev/null; do sleep 0.2; done
+            uid=$(/usr/bin/id -u)
+            /bin/launchctl kickstart -k "gui/$uid/sh.zeron.app" >/dev/null 2>&1 || true
+            /usr/bin/open "$bundle" || true
+            sleep 15
+            executable="$bundle/Contents/MacOS/zeron"
+            if /usr/bin/pgrep -f "$executable" >/dev/null 2>&1; then
+                /bin/rm -rf -- "$rollback"
+            elif [ -d "$rollback" ]; then
+                failed="$bundle.failed-$(date +%s)"
+                /bin/mv "$bundle" "$failed" 2>/dev/null || true
+                /bin/mv "$rollback" "$bundle"
+                /usr/bin/open "$bundle" || true
+            fi
+        "#
 }
 
 // ---------------------------------------------------------------------------
@@ -1034,6 +1046,21 @@ mod tests {
         assert!(!mac_signature_is_ad_hoc(
             "Authority=Developer ID Application: Example Corp (ABCDE12345)\n"
         ));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn mac_relauncher_restarts_the_bundle_runtime_before_the_gui() {
+        let script = mac_relauncher_script();
+        let restart = script
+            .find("launchctl kickstart -k")
+            .expect("background runtime restart");
+        let reopen = script.find("open \"$bundle\"").expect("desktop reopen");
+        assert!(
+            restart < reopen,
+            "runtime must restart before the GUI reopens"
+        );
+        assert!(script.contains("gui/$uid/sh.zeron.app"));
     }
 
     #[test]

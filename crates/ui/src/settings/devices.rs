@@ -300,7 +300,7 @@ impl Render for DevicesPage {
                 if let Some(version) = version.filter(|v| !v.is_empty()) {
                     meta.push(
                         div()
-                            .child(SharedString::from(format!("Runtime v{version}")))
+                            .child(SharedString::from(format!("Zeron v{version}")))
                             .into_any_element(),
                     );
                 }

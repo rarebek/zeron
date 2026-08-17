@@ -906,6 +906,14 @@ impl WorkspaceHost {
         Ok(self.mutate(|doc| doc.rename_device(device_id, name))?)
     }
 
+    pub fn merge_device(
+        &self,
+        source_device_id: &str,
+        target_device_id: &str,
+    ) -> Result<bool, EngineError> {
+        Ok(self.mutate(|doc| doc.merge_device(source_device_id, target_device_id))?)
+    }
+
     // ── git metadata (diff-sync host writes) ────────────────────────────────
 
     /// HEAD-watcher reconciliation: the branch checked out at the chat's cwd.

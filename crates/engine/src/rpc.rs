@@ -359,6 +359,13 @@ enum MutateParams {
     DeleteChat { chat_id: String },
     #[serde(rename_all = "camelCase")]
     RenameDevice { device_id: String, name: String },
+    /// Consolidate a superseded installation identity into this runtime while
+    /// preserving its projects and chats.
+    #[serde(rename_all = "camelCase")]
+    MergeDevice {
+        source_device_id: String,
+        target_device_id: String,
+    },
     /// Synced seen marker (LWW + monotonic guard): clears the "completed"
     /// badge on every device. `at` is epoch ms; default = now.
     #[serde(rename_all = "camelCase")]
@@ -748,6 +755,20 @@ impl EngineRpc {
                 .rename_device(&device_id, &name)
                 .map_err(failed)
                 .map(drop),
+            MutateParams::MergeDevice {
+                source_device_id,
+                target_device_id,
+            } => {
+                if target_device_id != self.doc_host.device_id() {
+                    return Err(RpcError::Failed(
+                        "a device identity can only be merged into the connected runtime".into(),
+                    ));
+                }
+                self.workspace
+                    .merge_device(&source_device_id, &target_device_id)
+                    .map_err(failed)
+                    .map(drop)
+            }
             MutateParams::MarkChatSeen { chat_id, at } => {
                 let at = at
                     .and_then(chrono::DateTime::<chrono::Utc>::from_timestamp_millis)
