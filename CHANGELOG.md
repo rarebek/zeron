@@ -2,6 +2,18 @@
 
 Short, user-facing notes for every Zeron release.
 
+## [0.2.10] - 2026-08-17
+
+### Changed
+
+- Each Zeron app now owns its local runtime while controlling other devices through the private relay; Devices shows one shared app version.
+
+### Fixed
+
+- macOS updates restart the bundled background runtime before reopening the GUI, preventing GUI/runtime version drift.
+- Superseded device identities can merge into the current runtime without losing projects or chats.
+- The PC tunnel no longer replaces the Mac runtime's local port, keeping local and remote runtimes independently available.
+
 ## [0.2.9] - 2026-08-17
 
 ### Added
